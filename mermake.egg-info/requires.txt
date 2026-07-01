@@ -1,0 +1,4 @@
+dask
+zarr
+numpy
+cupy-cuda12x

@@ -431,7 +431,12 @@ class TestFullDeconv:
 			zslice = cp.load(f'tests/examples/single/out/deconv.300.{z}.npz')
 			expected[z] = zslice['arr_0']
 	
-		cp.testing.assert_allclose(result.astype(cp.float16), expected, rtol=1e-6)
+		# Compare in float16 with a float16-appropriate tolerance. rtol=1e-6 is far
+		# tighter than float16 can represent (1 ULP near these magnitudes is ~2), so it
+		# effectively demanded bit-identical output and broke whenever the CuPy/CUDA
+		# build changed. atol=2 covers last-bit quantization; rtol=1e-2 covers the small
+		# proportional drift from FFT/library version differences.
+		cp.testing.assert_allclose(result.astype(cp.float16), expected, rtol=1e-2, atol=2)
 
 
 class TestIntegrationAndPerformance:

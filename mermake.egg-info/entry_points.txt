@@ -1,0 +1,2 @@
+[console_scripts]
+mermake = mermake.__main__:main

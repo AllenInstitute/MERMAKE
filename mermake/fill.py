@@ -1,8 +1,5 @@
 import cupy as cp
 
-
-import cupy as cp
-
 reflect_kernel = cp.RawKernel(r'''
 extern "C" __global__
 void mirror(float* arr, const int ndim, const long long* shape,

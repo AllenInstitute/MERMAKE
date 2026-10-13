@@ -128,12 +128,15 @@ def view_napari(queue, deconvolver, args ):
 	exit()
 
 
-def print_clean(msg, last_len=[0]):
+_last_len = 0
+
+def print_clean(msg):
+	global _last_len
 	# Clear previous line
-	sys.stdout.write('\r' + ' ' * last_len[0] + '\r')
+	sys.stdout.write('\r' + ' ' * _last_len + '\r')
 	sys.stdout.write(msg)
 	sys.stdout.flush()
-	last_len[0] = len(msg)  # Save new message length
+	_last_len = len(msg)  # Save new message length
 
 
 def main():

@@ -1,8 +1,6 @@
 import os
 import subprocess
 import sys
-import warnings
-from pathlib import Path
 from importlib.metadata import version, PackageNotFoundError
 
 

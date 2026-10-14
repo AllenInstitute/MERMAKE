@@ -503,7 +503,7 @@ class TestMockDependencies:
 		result = full_deconv(image=image, psfs=psf, tile_size=15)
 		assert result.shape == image.shape
 	
-	@patch('mermake.blur.box_1d')
+	@patch('mermake.gpu.blur.box_1d')
 	def test_with_mocked_blur(self, mock_blur):
 		"""Test with mocked blur function."""
 		mock_blur.return_value = None  # blur modifies in-place

@@ -152,16 +152,18 @@ def main():
 	# put this here to make sure to capture the correct gpu
 	os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
 	import cupy as cp
+	from mermake.gpu.runtime import check_cuda
+	check_cuda()
 	#cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
 	from mermake.deconvolver import Deconvolver
 	from mermake.maxima import find_local_maxima
 	from mermake.io import load_flats, ImageQueue, dict_to_namespace, Block
-	from mermake import math 
+	from mermake.gpu import elementwise
 	#from mermake.io import dict_to_namespace
 	#from mermake.image_queue import ImageQueue
 
 	from mermake.align import Aligner 
-	import mermake.blur as blur
+	from mermake.gpu import blur
 	from mermake.align import drift, drift_save
 
 	# Convert settings to namespace and attach each top-level section to args
@@ -250,7 +252,7 @@ def main():
 
 					if aligner:
 						# this reflects the subtract so there is no roll over due to datatypes
-						math.subtract_reflect(chan[slices_chan], block.back[icol][slices_back], out=chan[slices_chan])
+						elementwise.subtract_reflect(chan[slices_chan], block.back[icol][slices_back], out=chan[slices_chan])
 
 					# there is probably a better way to do the Xh stacking
 					Xhf = []

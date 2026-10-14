@@ -21,7 +21,7 @@ import dask.array as da
 import cupy as cp
 import numpy as np
 
-from . import blur
+from .gpu import blur
 from . import __version__
 
 import logging

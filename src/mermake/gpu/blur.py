@@ -1,11 +1,7 @@
-import os
 import cupy as cp
+from .runtime import kernel_source
 
-# Get path relative to this file's location
-this_dir = os.path.dirname(__file__)
-cu_path = os.path.join(this_dir, "blur.cu")
-with open(cu_path, "r") as f:
-	kernel_code = f.read()
+kernel_code = kernel_source("blur.cu")
 
 # Define the kernels
 box_1d_kernel = cp.RawKernel(kernel_code, "box_1d")

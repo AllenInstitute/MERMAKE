@@ -3,7 +3,7 @@ import pytest
 import cupy as cp
 import numpy as np
 
-import mermake.blur as blur
+import mermake.gpu.blur as blur
 
 
 def numpy_box_1d(arr, size, axis=0):

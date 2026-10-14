@@ -1,12 +1,8 @@
-import os
 import cupy as cp
+from .gpu.runtime import kernel_source
 import time
 
-# Get path relative to this file's location
-this_dir = os.path.dirname(__file__)
-cu_path = os.path.join(this_dir, "maxima.cu")
-with open(cu_path, "r") as f:
-	kernel_code = f.read()
+kernel_code = kernel_source("maxima.cu")
 
 # Define the kernels separately
 local_maxima_count_kernel = cp.RawKernel(kernel_code, "local_maxima_count")

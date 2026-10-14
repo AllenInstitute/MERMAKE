@@ -2,7 +2,7 @@ import pytest
 import cupy as cp
 import numpy as np
 
-from mermake.fill import reflect, repeat
+from mermake.gpu.fill import reflect, repeat
 
 
 @pytest.fixture

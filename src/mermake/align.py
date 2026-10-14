@@ -2,7 +2,7 @@ import os
 import pickle
 from concurrent.futures import ThreadPoolExecutor
 
-from .utils import fftconvolve
+from .gpu.fft import fftconvolve
 
 import cupy as cp
 from cupyx.scipy.spatial import KDTree

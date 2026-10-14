@@ -4,8 +4,8 @@ from itertools import zip_longest, chain, repeat, cycle
 import cupy as cp
 import numpy as np
 
-from . import blur
-from .fill import reflect
+from .gpu import blur
+from .gpu.fill import reflect
 
 def repeat_last(iterable):
 	it = iter(iterable)

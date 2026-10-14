@@ -44,6 +44,40 @@ def batch_laplacian_fft(batch_size, shape):
 
 
 class Deconvolver:
+	"""FFT deconvolution of a z-stack, done patch by patch on the GPU.
+
+	The xy plane is cut into square patches of ``patch_size`` pixels. Each patch gets
+	``patch_overlap`` pixels of context on every side (reflected at the image border),
+	is deconvolved with a regularized (Laplacian) Wiener-style filter built from the PSF,
+	and only its central ``patch_size`` square is kept. The z axis is reflect-padded by
+	``zpad`` planes on both sides instead of being cut.
+
+	Parameters
+	----------
+	psfs : numpy.ndarray or dict of numpy.ndarray
+		PSF with shape (z, y, x), or several PSFs sampled on a grid across the field of view,
+		which are then used one per patch in order. Cropped or zero-padded to
+		(depth, patch_size, patch_size) and normalized to sum 1.
+	channel_shape : tuple of int
+		(z, y, x) shape of one channel of the images that will be deconvolved.
+	patch_size : int
+		Edge of the square xy patches, in pixels. Not the raw image size.
+	zpad : int
+		Planes of reflected padding added above and below in z.
+	patch_overlap : int
+		Pixels of context around each patch, in xy.
+	beta : float
+		Weight of the Laplacian regularization term. Larger means smoother, weaker deconvolution.
+	xp : module
+		Array module, cupy.
+	**kwargs
+		Ignored, so a whole settings section can be passed with ``**vars(section)``.
+
+	Notes
+	-----
+	The patch buffers are allocated once, with shape (patch_size + 2*patch_overlap) squared
+	per z-plane, so ``patch_size`` and ``patch_overlap`` set the GPU memory use.
+	"""
 	def __init__(self, psfs, channel_shape, patch_size=300, zpad=0, patch_overlap=89, beta=0.001, xp=cp, **kwargs):
 		self.patch_size = patch_size
 		self.depth = channel_shape[0]
@@ -94,6 +128,27 @@ class Deconvolver:
 		self.xp = xp
 
 	def patch_wise(self, image, flat_field=None, blur_radius=None, **kwargs):
+		"""Deconvolve ``image`` one patch at a time.
+
+		Parameters
+		----------
+		image : cupy.ndarray
+			(z, y, x) image, uint16 or float.
+		flat_field : cupy.ndarray, optional
+			Flat field the patches are divided by before deconvolution.
+		blur_radius : int, optional
+			Width in pixels of the xy box blur subtracted from each deconvolved patch.
+
+		Yields
+		------
+		x, y : int
+			Position of the patch in the image. The patch buffers are reused, so copy
+			what you need before advancing.
+		deconvolved : cupy.ndarray
+			Deconvolved patch including the overlap margin, float32.
+		raw : cupy.ndarray
+			The raw patch (flat field removed again) with the same shape.
+		"""
 		xp = cp.get_array_module(image)
 		zpad = self.zpad
 		patch_overlap = self.patch_overlap

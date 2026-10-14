@@ -10,6 +10,37 @@ local_maxima_kernel = cp.RawKernel(kernel_code, "local_maxima")
 delta_fit_cross_corr_kernel = cp.RawKernel(kernel_code, "delta_fit_cross_corr")
 
 def find_local_maxima(image, threshold=None, delta=1, delta_fit=0, raw=None, sigmaZ=1, sigmaXY=1.5, **kwargs):
+	"""Find local intensity maxima in a 3D image and refine them to sub-voxel positions.
+
+	A voxel is a maximum if it is brighter than ``threshold`` and no voxel within
+	``delta`` of it is brighter. Each maximum is then fitted on the raw image.
+
+	Parameters
+	----------
+	image : cupy.ndarray
+		(z, y, x) float32 image to search, usually the deconvolved image.
+	threshold : float
+		Minimum intensity of a maximum, in the units of ``image``.
+	delta : int
+		Radius in voxels of the spherical neighborhood a maximum has to win. At most 5.
+	delta_fit : int
+		Radius in voxels of the neighborhood of ``raw`` used for the position fit.
+	raw : cupy.ndarray
+		(z, y, x) image the fit is done on, same shape as ``image``. Required when
+		any maximum is found.
+	sigmaZ, sigmaXY : float
+		Width in voxels of the Gaussian weighting of the fit, in z and in xy.
+	**kwargs
+		Ignored, so a whole settings section can be passed with ``**vars(section)``.
+
+	Returns
+	-------
+	cupy.ndarray
+		float32 array with shape (n, 8) on the GPU. Columns: z, x, y of the refined
+		position (x indexes the second image axis), local background, ``a`` (Gaussian-weighted
+		cross-correlation with ``raw``), ``habs`` (``raw`` at the maximum), ``hn``
+		(Gaussian-weighted cross-correlation with ``image``) and ``h`` (``image`` at the maximum).
+	"""
 	# Ensure the image is in C-contiguous order for the kernel
 	#if not image.flags.c_contiguous:
 	#	print('not contiguous')

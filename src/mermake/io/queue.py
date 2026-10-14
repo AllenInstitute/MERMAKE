@@ -3,7 +3,6 @@ from pathlib import Path
 import queue
 import threading
 from itertools import chain
-from collections import defaultdict
 
 import cupy as cp
 from .. import __version__
@@ -41,40 +40,14 @@ class ImageQueue:
 		os.makedirs(self.output_folder, exist_ok = True)
 		
 		fov_min, fov_max = (-float('inf'), float('inf'))
-		if hasattr(self, "fov_range"):
+		if self.fov_range:
 			fov_min, fov_max = map(float, self.fov_range.split(':'))
 		
 		filtered = FolderFilter(self.hyb_range, self.regex, fov_min, fov_max)
 		matches = filtered.get_matches(self.hyb_folders)
 
-		# do output summary, eventually replace with terminal gui
-		counts = defaultdict(lambda: defaultdict(int))
-		rounds = dict()
-		for iset,ifov in matches:
-			for path in matches[(iset,ifov)]:
-				base = os.path.basename(os.path.dirname(path))
-				parts = list(filtered._parse_pattern(base))
-				parts = parts[:3]
-				undone = filtered._undo_regex(parts)
-				counts[iset][undone] += 1
-				rounds[undone] = True
-		rounds = sorted(rounds)
-		width = max(len(r) for r in rounds) + 1
-		summary = ''
-		summary += 'SUMMARY'.center(len(rounds) * width + width, '-')	
-		summary += '\n'
-		summary += 'set'.ljust(width)
-		for undone in rounds:
-			summary += undone.rjust(width)
-		summary += '\n'
-		for iset in counts:
-			summary += str(iset).ljust(width)
-			for undone in rounds:
-				summary += str(counts[iset][undone]).rjust(width)
-			summary += '\n'
-		summary += ''.center(len(rounds) * width + width, '-')
-		self.summary = summary
-			
+		self.summary = filtered.summary(matches)
+
 		# Peek at first image to set shape/dtype
 		first_image = None
 		for path in chain.from_iterable(matches.values()):

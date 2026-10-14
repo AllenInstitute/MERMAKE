@@ -1,5 +1,6 @@
 import os
 import re
+from collections import defaultdict
 from pathlib import Path
 from typing import Tuple, Optional, Union
 
@@ -130,6 +131,28 @@ class FolderFilter:
 			return False
 		return self._compare_patterns(file_parts, self.start_parts, self.end_parts)
 	
+	def summary(self, matches):
+		"""Table of how many fields of view were found per set and round."""
+		counts = defaultdict(lambda: defaultdict(int))
+		rounds = set()
+		for iset, ifov in matches:
+			for path in matches[(iset, ifov)]:
+				base = os.path.basename(os.path.dirname(path))
+				parts = list(self._parse_pattern(base))[:3]
+				undone = self._undo_regex(parts)
+				counts[iset][undone] += 1
+				rounds.add(undone)
+		if not rounds:
+			return 'No matching images found.'
+		rounds = sorted(rounds)
+		width = max(len(r) for r in rounds) + 1
+		lines = ['SUMMARY'.center(len(rounds) * width + width, '-')]
+		lines.append('set'.ljust(width) + ''.join(r.rjust(width) for r in rounds))
+		for iset in counts:
+			lines.append(str(iset).ljust(width) + ''.join(str(counts[iset][r]).rjust(width) for r in rounds))
+		lines.append(''.center(len(rounds) * width + width, '-'))
+		return '\n'.join(lines)
+
 	def get_matches(self, folders):
 		matches = dict()
 		for root in folders:

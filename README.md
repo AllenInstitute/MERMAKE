@@ -37,70 +37,33 @@ graph TD;
 
 ##  MERMAKE Usage
 
-To run **MERMAKE**, you'll need to provide a configuration TOML file with a few key settings describing your experiment. 
 ```
-mermake my_settings.toml
+mermake settings.toml
 ```
 
-If mermake is run without providing a toml file, it will warn about the usage and print out the toml file format. Most users only need to edit the `[paths]` section.
-
-| TOML Section | Variable Name     | Description                                                                 |
-|--------------|-------------------|-----------------------------------------------------------------------------|
-| `[paths]`    | `codebook`        | Path to the CSV codebook for decoding barcodes (for MERFISH data only)     |
-| `[paths]`    | `psf_file`        | Path to the PSF file used for deconvolution (e.g., `.npy` or `.pkl`)       |
-| `[paths]`    | `flat_field_tag`  | Prefix path for flat field correction files (e.g., `"Scope3_"`)            |
-| `[paths]`    | `hyb_range`       | Range of hybridization rounds to process (e.g., `'H1_*_set1:H1_*_set3'`) |
-| `[paths]`    | `hyb_folders`     | List of folders containing raw imaging data                                |
-| `[paths]`    | `output_folder`   | Path to the folder where MERMAKE should save results                        |
-
-
->  All other sections (`[hybs]`, `[dapi]`, etc.) are preconfigured for most use cases and usually do not need to be changed.  Though to use multi-psfs you will want to set the `patch_size` to the size of the samping grid (ie 300).
-
----
-
-###  Example Config (`config.toml`)
+The settings file is TOML. Only the `[paths]` section is required, and it needs five keys: `psf_file`, `flat_field_tag`, `hyb_folders`, `hyb_range` and `output_folder` (plus the optional `fov_range`). Every other setting has a default, so `[hybs]` and `[dapi]` only list what you want to change. Relative paths are resolved against the folder that holds the settings file.
 
 ```toml
 [paths]
-codebook = "codebook.csv"
-psf_file = "psfs/psf_scope3.npy"
-flat_field_tag = "flat_field/Scope3_"
-hyb_range = "H1_*_set1:H16_*_set3"
-hyb_folders = ["experiment_folder"]
-output_folder = "output"
-#---------------------------------------------------------------------------------------#
-#---------------------------------------------------------------------------------------#
-#           you probably dont have to change any of the settings below                  #
-#---------------------------------------------------------------------------------------#
-#---------------------------------------------------------------------------------------#
-
-hyb_save =  '{fov}--{tag}--col{icol}__Xhfits.npz'
-dapi_save = '{fov}--{tag}--dapiFeatures.npz'
-drift_save = 'drift_Conv_zscan__{ifov:0>3}--_set{iset}.pkl'
-regex = '''([A-z]+)(\d+)_([^_]+)_set(\d+)(.*)''' #use triple quotes to avoid double escape
+psf_file = 'psfs/psf_scope3.npy'
+flat_field_tag = 'flat_field/Scope3_'
+hyb_folders = ['experiment_folder']
+hyb_range = 'H1_BICAN_set1:H16_BICAN_set1'
+output_folder = 'output'
 
 [hybs]
-patch_size = 500
-patch_overlap = 89
-beta = 0.0001
-threshold = 3600
-blur_radius = 30
-delta = 1
-delta_fit = 3
-sigmaZ = 1
-sigmaXY = 1.5
-
-[dapi]
-patch_size = 500
-patch_overlap = 89
-beta = 0.01
-threshold = 3.0
-blur_radius = 50
-delta = 5
-delta_fit = 5
-sigmaZ = 1
-sigmaXY = 1.5
+threshold = 4000   # override one deconvolution/peak-finding setting
 ```
+
+The settings are checked before the GPU is touched. Misspelled keys, wrong types, out of range values and missing files are all reported at once, for example `[hybs] unknown key 'threshhold', did you mean 'threshold'?`.
+
+| Command | What it does |
+|---------|--------------|
+| `mermake --print-example` | print a minimal commented settings file to start from |
+| `mermake --print-config settings.toml` | print **every** setting with its description, unit and the value that will be used (defaults filled in); needs no GPU |
+| `mermake --dry-run settings.toml` | validate and list the images that would be processed; needs no GPU |
+
+`--print-config` is the reference for what each setting means. In short, `patch_size` and `patch_overlap` describe the xy patches the image is cut into for FFT deconvolution (not the raw image size), `beta` and `blur_radius` shape the deconvolution, and `threshold`, `delta`, `delta_fit`, `sigmaZ` and `sigmaXY` control the peak finding. To use multiple PSFs, set `patch_size` to the spacing of the PSF sampling grid (for example 300).
 
 ## 🔍 If you only want to process the dapi channels a trick that you can use is
 To set the `hyb_save` toml string to not be dynamic and with different names for each fov and hyb.
@@ -126,12 +89,13 @@ Source layout (`src/mermake/`):
 
 | Module | Contents |
 |--------|----------|
-| `cli.py`, `__main__.py` | argument parsing, settings loading, `mermake` entry point |
+| `cli.py`, `__main__.py` | argument parsing, `--print-config`, `--dry-run`, `mermake` entry point |
 | `pipeline.py` | the processing loop: dapi, per-channel maxima, drift, save |
 | `io/` | `readers` (zarr/flat fields), `naming` (filename parsing, `FolderFilter`), `queue` (`ImageQueue`, `Block`), `metadata` (XML) |
 | `gpu/` | CuPy kernels and helpers: `blur`, `fill`, `elementwise`, `fft`, `runtime`, and the `.cu` sources in `kernels/` |
 | `deconvolver.py`, `maxima.py`, `align.py` | deconvolution, local-maxima detection, drift and alignment |
-| `config.py`, `points.py`, `viz.py` | config helpers, point clustering helpers, napari viewer |
+| `config.py` | the settings: typed dataclasses with defaults, per-setting docs and validation |
+| `points.py`, `viz.py` | point clustering helpers, napari viewer |
 
 ## Known issues
 
@@ -142,7 +106,6 @@ Bugs and rough edges found during the package restructuring. Entries are kept un
 | 2 | Test fixtures | `tests/examples/single/out/*.npz` do not match the output of the current code (nor of the code before the restructuring), so they are from an older version and cannot be used as a regression reference. | Open. Regenerate them or replace them with a small fixture. |
 | 3 | Test data size | `tests/examples/` is about 287 MB tracked in git. | Open. Plan: a small fixture in git, the full data as a Code Ocean data asset. |
 | 4 | Tests | `test_with_mocked_blur` in `tests/test_deconvolver.py` is never collected, so it does not run. | Open. |
-| 5 | Config docs | The example config above and `example.toml` disagree (`drift_save` and `regex`). | Open. `example.toml` is to become the single source. |
 | 6 | Linting | `ruff check` reported 26 findings under the configured rule set (E4, E7, E9, F), including unused variables and a bare `except`. | Fixed in `30f6cb9`. CI now enforces it. |
 | 7 | Maxima kernels | Neighbor lookups in `local_maxima_count` and `local_maxima` read out of bounds when `delta` is larger than an image dimension, which crashed the test suite with `cudaErrorIllegalAddress`. Real images are far larger than `delta`, so normal runs were not affected. | Fixed in `5bd0737`. |
 | 8 | Point helpers | `points.estimate_step_size` raised `NameError` because `KDTree` was never imported. Nothing calls it. | Fixed in the `io`/`utils` split. |

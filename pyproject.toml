@@ -50,7 +50,7 @@ where = ["src"]
 include = ["mermake*"]
 
 [tool.setuptools.package-data]
-mermake = ["gpu/kernels/*.cu"]
+mermake = ["gpu/kernels/*.cu", "example.toml"]
 
 [tool.setuptools.dynamic]
 version = { file = ["VERSION"] }

@@ -1,0 +1,27 @@
+# Example mermake settings file. Relative paths are resolved against the folder
+# containing this file.
+#
+# Only [paths] is required. Every other setting has a default, so [hybs] and
+# [dapi] are only needed to override something. To see every setting with its
+# description and its current value, run `mermake --print-config this_file.toml`.
+
+[paths]
+# Point spread function, a .npy array with shape (z, y, x)
+psf_file = 'psfs/psf_750_Scope3_final.npy'
+# Prefix of the flat field files, every file matching 'flat_field/Scope3_*' is used
+flat_field_tag = 'flat_field/Scope3_'
+# Directories that contain one sub-directory per hybridization round
+hyb_folders = ['Tominersen_Human_05_09_2025']
+# Rounds to process, written like the round folder names
+hyb_range = 'H1_BICAN_set1:H16_BICAN_set1'
+# Where the results go
+output_folder = 'MERFISH_Analysis_MERMAKE'
+# Optional: only process these fields of view (inclusive)
+fov_range = '0:1'
+
+# Example overrides, uncomment to change:
+#[hybs]
+#threshold = 4000
+#
+#[dapi]
+#patch_size = 300

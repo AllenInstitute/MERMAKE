@@ -87,16 +87,11 @@ def write_settings(root, out):
 	dapi = section.format(patch=NY, overlap=OVERLAP, beta=0.01, threshold=3.0, blur=20, delta=2, delta_fit=3)
 	text = textwrap.dedent(f"""\
 		[paths]
-		codebook = 'none'
 		psf_file = '{root / "psf.npy"}'
 		flat_field_tag = '{root / "flat_"}'
 		hyb_range = 'H1_TEST_set1:H1_TEST_set1'
 		hyb_folders = ['{root / "exp"}']
 		output_folder = '{out}'
-		hyb_save = '{{fov}}--{{tag}}--col{{icol}}__Xhfits.npz'
-		dapi_save = '{{fov}}--{{tag}}--dapiFeatures.npz'
-		drift_save = 'drift_Conv_zscan__{{ifov:0>3}}--_set{{iset}}.pkl'
-		regex = '''([A-z]+)(\\d+)_(.+)_set(\\d+)(.*)'''
 
 		[hybs]""") + textwrap.dedent(hybs) + "\n[dapi]" + textwrap.dedent(dapi)
 	path = root / "settings.toml"

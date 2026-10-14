@@ -8,7 +8,6 @@ import cupy as cp
 import dask.array as da
 
 from .align import drift, drift_save
-from .config import dict_to_namespace
 from .deconvolver import Deconvolver
 from .io.queue import ImageQueue, Block
 from .io.readers import load_flats
@@ -28,9 +27,9 @@ def print_clean(msg):
 
 
 def build_config(args):
-	"""Attach each top-level section of the settings dict to ``args`` as a namespace."""
-	for key, value in vars(dict_to_namespace(args.settings)).items():
-		setattr(args, key, value)
+	"""Expose the sections of the validated settings as ``args.paths``, ``args.hybs`` and ``args.dapi``."""
+	for name in ("paths", "hybs", "dapi"):
+		setattr(args, name, getattr(args.settings, name))
 	return args
 
 

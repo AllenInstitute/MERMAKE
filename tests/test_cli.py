@@ -9,15 +9,21 @@ from mermake import cli
 SETTINGS = """
 [paths]
 psf_file = 'psf.npy'
+flat_field_tag = 'flat_'
 hyb_folders = ['exp']
+hyb_range = 'H1_X_set1:H2_X_set1'
+output_folder = 'out'
 
 [hybs]
-patch_size = 500
+patch_size = 400
 """
 
 
 @pytest.fixture
 def toml_file(tmp_path):
+	(tmp_path / "psf.npy").write_bytes(b"")
+	(tmp_path / "flat_0.npz").write_bytes(b"")
+	(tmp_path / "exp").mkdir()
 	path = tmp_path / "settings.toml"
 	path.write_text(SETTINGS)
 	return str(path)
@@ -26,8 +32,9 @@ def toml_file(tmp_path):
 class TestIsValidFile:
 	def test_loads_toml(self, toml_file):
 		settings = cli.is_valid_file(toml_file)
-		assert settings["paths"]["psf_file"] == "psf.npy"
-		assert settings["hybs"]["patch_size"] == 500
+		assert settings.paths.psf_file.endswith("psf.npy")
+		assert settings.hybs.patch_size == 400
+		assert settings.dapi.patch_size == 500  # default
 
 	def test_missing_file(self, tmp_path):
 		with pytest.raises(argparse.ArgumentTypeError, match="does not exist"):
@@ -36,7 +43,7 @@ class TestIsValidFile:
 	def test_invalid_toml(self, tmp_path):
 		bad = tmp_path / "bad.toml"
 		bad.write_text("this is = = not toml")
-		with pytest.raises(argparse.ArgumentTypeError, match="Error loading TOML"):
+		with pytest.raises(argparse.ArgumentTypeError, match="not valid TOML"):
 			cli.is_valid_file(str(bad))
 
 
@@ -45,7 +52,7 @@ class TestParser:
 		args = cli.build_parser("mermake").parse_args([toml_file])
 		assert args.gpu == 0
 		assert args.check is False
-		assert args.settings["paths"]["hyb_folders"] == ["exp"]
+		assert args.settings.paths.hyb_folders[0].endswith("exp")
 
 	def test_options(self, toml_file):
 		args = cli.build_parser("mermake").parse_args(["-g", "2", "-c", toml_file])
@@ -54,11 +61,11 @@ class TestParser:
 
 	def test_missing_settings_prints_example(self, capsys):
 		with pytest.raises(SystemExit) as exc:
-			cli.build_parser("mermake").parse_args([])
+			cli.main([])
 		assert exc.value.code == 2
 		err = capsys.readouterr().err
 		assert "settings.toml" in err
-		assert "[paths]" in err and "[hybs]" in err and "[dapi]" in err
+		assert "[paths]" in err and "psf_file" in err
 
 	def test_bad_settings_path(self, tmp_path, capsys):
 		with pytest.raises(SystemExit):
@@ -69,11 +76,30 @@ class TestParser:
 		assert cli.build_parser("mermake").usage.startswith("mermake ")
 
 
-def test_example_config_text_is_valid_toml():
-	"""The example printed to users must itself be loadable."""
-	tomllib = cli.tomllib
-	settings = tomllib.loads(cli.toml_text)
-	assert {"paths", "hybs", "dapi"} <= set(settings)
+def test_invalid_settings_reported(tmp_path):
+	bad = tmp_path / "bad.toml"
+	bad.write_text("[paths]\npsf_file = 'x'\n")
+	with pytest.raises(argparse.ArgumentTypeError, match="missing required key"):
+		cli.is_valid_file(str(bad))
+
+
+def test_print_example(capsys):
+	cli.main(["--print-example"])
+	assert "[paths]" in capsys.readouterr().out
+
+
+def test_print_config_needs_no_gpu(toml_file, capsys):
+	cli.main(["--print-config", toml_file])
+	out = capsys.readouterr().out
+	assert "patch_size = 400" in out and "[dapi]" in out
+
+
+def test_dry_run_lists_images(toml_file, tmp_path, capsys):
+	zarr = tmp_path / "exp" / "H1_X_set1" / "Conv_zscan__003.zarr"
+	zarr.mkdir(parents=True)
+	cli.main(["--dry-run", toml_file])
+	out = capsys.readouterr().out
+	assert "1 images" in out
 
 
 def test_importing_cli_does_not_import_cupy():

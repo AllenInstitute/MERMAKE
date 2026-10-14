@@ -2,23 +2,22 @@ Introduction
 ------------
 MERMAKE processes MERFISH, smFISH, and IF imaging data by detecting local intensity maxima (puncta) in 3D image stacks. In multiplexed experiments (MERFISH), these puncta are decoded using a user-supplied codebook, while in smFISH mode and IF, the puncta are simply called and reported as-is.
 
-To install `MERMAKE`,
+## Installation
+
+MERMAKE needs an **NVIDIA GPU** and CuPy. Pick the extra that matches your CUDA version (`cuda12` for CUDA 12.x, `cuda11` for CUDA 11.x). The extras install CuPy together with the CUDA headers it needs to compile kernels (`cupy-cuda12x[ctk]`), so a separate CUDA Toolkit install is not required. `nvcc` is not needed either, since CuPy compiles kernels with NVRTC.
+
+With [uv](https://docs.astral.sh/uv/):
 ```
-python3 -m pip install mermake
+uv sync --extra cuda12
+uv run mermake settings.toml
 ```
 
-## ❗The newest version of mermake (>= 0.0.61) does drift but requires the nightly release of cupy available via:
- 
+With pip:
 ```
-pip install --pre cupy-cuda12x==14.0.0a1 -f https://pip.cupy.dev/pre
+python3 -m pip install "mermake[cuda12]"
 ```
 
-## ⚠️ GPU Requirements & CUDA Toolkit
-
-MERMAKE relies on **CuPy** for GPU-accelerated image processing. To run MERMAKE successfully, you must have:
-
-1. An **NVIDIA GPU** with CUDA support
-2. The **CUDA Toolkit** installed (Refer to the official CuPy installation <a href="https://docs.cupy.dev/en/stable/install.html" target="_blank">guide</a>)
+The `cuda11` and `cuda12` extras are mutually exclusive. Add `viz` (`mermake[cuda12,viz]`) for the napari viewer used by `mermake --check`. If CuPy cannot find a GPU, `mermake` stops at startup with an error; see the [CuPy install guide](https://docs.cupy.dev/en/stable/install.html) for driver and CUDA troubleshooting.
 
 ## MERMAKE pipe line
 the general steps of the MERMAKE merfish pipeline is:
@@ -113,4 +112,38 @@ dapi_save = '{fov}--{tag}--dapiFeatures.npz'
 What this does is trick mermake into thinking the hybs for each fov and channel has already been processed due
 to the existing Xhfits.npz file
 
+## Development
 
+```
+uv sync --extra cuda12   # runtime plus the dev group (pytest, ruff)
+uv run pytest tests/ -v  # the tests need a CUDA GPU
+uv run ruff check
+uv build
+```
+
+Source layout (`src/mermake/`):
+
+| Module | Contents |
+|--------|----------|
+| `cli.py`, `__main__.py` | argument parsing, settings loading, `mermake` entry point |
+| `pipeline.py` | the processing loop: dapi, per-channel maxima, background, drift, save |
+| `io/` | `readers` (zarr/flat fields), `naming` (filename parsing, `FolderFilter`), `queue` (`ImageQueue`, `Block`), `metadata` (XML) |
+| `gpu/` | CuPy kernels and helpers: `blur`, `fill`, `elementwise`, `fft`, `runtime`, and the `.cu` sources in `kernels/` |
+| `deconvolver.py`, `maxima.py`, `align.py` | deconvolution, local-maxima detection, drift and alignment |
+| `config.py`, `points.py`, `viz.py` | config helpers, point clustering helpers, napari viewer |
+
+## Known issues
+
+Bugs and rough edges found during the package restructuring. Entries are kept until fixed.
+
+| # | Area | Issue | Status |
+|---|------|-------|--------|
+| 1 | Background subtraction | `background_range` has no effect on the output. In `pipeline.process_image` the `aligner` is reset to `None` for every image, and background images end in an early return, so the `elif aligner:` branch (which computes the shifted slices and runs `subtract_reflect`) can never run. The pre-refactor code behaved the same. | Open. Fixing it changes output, so decide the intended behavior first. |
+| 2 | Test fixtures | `tests/examples/single/out/*.npz` do not match the output of the current code (nor of the code before the restructuring), so they are from an older version and cannot be used as a regression reference. | Open. Regenerate them or replace them with a small fixture. |
+| 3 | Test data size | `tests/examples/` is about 287 MB tracked in git. | Open. Plan: a small fixture in git, the full data as a Code Ocean data asset. |
+| 4 | Tests | `test_with_mocked_blur` in `tests/test_deconvolver.py` is never collected, so it does not run. | Open. |
+| 5 | Config docs | The example config above and `example.toml` disagree (`drift_save`, `regex`, and `background_range`, which is active here and commented out in `example.toml`). | Open. `example.toml` is to become the single source. |
+| 6 | Linting | `ruff check` reports about 84 pre-existing findings. | Open. |
+| 7 | Maxima kernels | Neighbor lookups in `local_maxima_count` and `local_maxima` read out of bounds when `delta` is larger than an image dimension, which crashed the test suite with `cudaErrorIllegalAddress`. Real images are far larger than `delta`, so normal runs were not affected. | Fixed in `5bd0737`. |
+| 8 | Point helpers | `points.estimate_step_size` raised `NameError` because `KDTree` was never imported. Nothing calls it. | Fixed in the `io`/`utils` split. |
+| 9 | Compare script | `scripts/compare_xh.py` used undefined `ref_data`/`temp_data` in its `Xh_minus` check. | Fixed in the `__main__` split. |

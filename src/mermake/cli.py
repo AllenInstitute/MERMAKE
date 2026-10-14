@@ -37,8 +37,8 @@ toml_text = r"""
 		drift_save = 'drift_Conv_zscan__{ifov:0>3}--_set{iset}.pkl'
         regex = '''([A-z]+)(\d+)_(.+)_set(\d+)(.*)''' #use triple quotes to avoid double escape
         [hybs]
-        tile_size = 500
-        overlap = 89
+        patch_size = 500
+        patch_overlap = 89
         beta = 0.0001
         threshold = 3600
         blur_radius = 30
@@ -48,8 +48,8 @@ toml_text = r"""
         sigmaXY = 1.5
         
         [dapi]
-        tile_size = 300
-        overlap = 89
+        patch_size = 300
+        patch_overlap = 89
         beta = 0.01
         threshold = 3.0
         blur_radius = 50

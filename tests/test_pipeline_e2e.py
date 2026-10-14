@@ -23,7 +23,7 @@ OVERLAP = 8
 # (2 * zpad + depth is odd for an odd z depth), shifting reported positions
 # by +1 along that axis. See "Known issues" in the README.
 
-# (z, y, x) of the planted spots, well away from the tile borders
+# (z, y, x) of the planted spots, well away from the patch borders
 SPOTS = {
 	0: [(5, 30, 30), (5, 60, 70), (3, 45, 20)],
 	1: [(5, 25, 65), (7, 70, 40), (4, 50, 50)],
@@ -73,8 +73,8 @@ def write_psf_and_flats(root):
 
 def write_settings(root, out):
 	section = """
-		tile_size = {tile}
-		overlap = {overlap}
+		patch_size = {patch}
+		patch_overlap = {overlap}
 		beta = {beta}
 		threshold = {threshold}
 		blur_radius = {blur}
@@ -83,8 +83,8 @@ def write_settings(root, out):
 		sigmaZ = 1
 		sigmaXY = 1.5
 	"""
-	hybs = section.format(tile=NY, overlap=OVERLAP, beta=0.0001, threshold=1000, blur=20, delta=1, delta_fit=3)
-	dapi = section.format(tile=NY, overlap=OVERLAP, beta=0.01, threshold=3.0, blur=20, delta=2, delta_fit=3)
+	hybs = section.format(patch=NY, overlap=OVERLAP, beta=0.0001, threshold=1000, blur=20, delta=1, delta_fit=3)
+	dapi = section.format(patch=NY, overlap=OVERLAP, beta=0.01, threshold=3.0, blur=20, delta=2, delta_fit=3)
 	text = textwrap.dedent(f"""\
 		[paths]
 		codebook = 'none'

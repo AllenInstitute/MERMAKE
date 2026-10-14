@@ -44,9 +44,9 @@ def batch_laplacian_fft(batch_size, shape):
 
 
 class Deconvolver:
-	def __init__(self, psfs, channel_shape, tile_size=300, zpad=0, overlap=89, beta=0.001, xp=cp, **kwargs):
-		self.tile_size = tile_size
-		self.tile_height = channel_shape[0]
+	def __init__(self, psfs, channel_shape, patch_size=300, zpad=0, patch_overlap=89, beta=0.001, xp=cp, **kwargs):
+		self.patch_size = patch_size
+		self.depth = channel_shape[0]
 
 		if isinstance(psfs, dict):
 			# new method using multiple psfs taken across fov
@@ -55,7 +55,7 @@ class Deconvolver:
 			# old single psf method
 			psf_stack = self.center_psf(psfs)
 			psf_stack = self.center_psf(psfs)[None, ...]
-		psf_stack = np.pad(psf_stack, ((0, 0), (zpad, zpad), (overlap, overlap), (overlap, overlap)), mode='constant')
+		psf_stack = np.pad(psf_stack, ((0, 0), (zpad, zpad), (patch_overlap, patch_overlap), (patch_overlap, patch_overlap)), mode='constant')
 		shift = -np.array(psf_stack.shape[1:]) // 2
 		psf_stack[:] = np.roll(psf_stack, shift=shift, axis=(1,2,3))
 		
@@ -80,137 +80,137 @@ class Deconvolver:
 			cp._default_pinned_memory_pool.free_all_blocks()  # Free pinned memory pool
 			cp.cuda.runtime.deviceSynchronize()  # Ensure all operations are completed
 
-		# Preallocate tile arrays
-		if tile_size:
-			tile_shape = (tile_size + 2*overlap, tile_size + 2*overlap)
-			self.tile_pad = xp.empty((2*zpad + self.tile_height, *tile_shape), dtype=xp.float32)
-			self.tile_res = xp.empty((		 self.tile_height, *tile_shape), dtype=xp.float32)
-			self.tile_fft = xp.empty_like(self.tile_pad, dtype=xp.complex64)
-			self.tile_buf = xp.empty_like(self.tile_res)
-			self.tile_tem = xp.empty_like(self.tile_res)
+		# Preallocate patch arrays
+		if patch_size:
+			patch_shape = (patch_size + 2*patch_overlap, patch_size + 2*patch_overlap)
+			self.patch_pad = xp.empty((2*zpad + self.depth, *patch_shape), dtype=xp.float32)
+			self.patch_res = xp.empty((		 self.depth, *patch_shape), dtype=xp.float32)
+			self.patch_fft = xp.empty_like(self.patch_pad, dtype=xp.complex64)
+			self.patch_buf = xp.empty_like(self.patch_res)
+			self.patch_tem = xp.empty_like(self.patch_res)
 
-		self.overlap = overlap
+		self.patch_overlap = patch_overlap
 		self.zpad = zpad
 		self.xp = xp
 
-	def tile_wise(self, image, flat_field=None, blur_radius=None, **kwargs):
+	def patch_wise(self, image, flat_field=None, blur_radius=None, **kwargs):
 		xp = cp.get_array_module(image)
 		zpad = self.zpad
-		overlap = self.overlap
-		tile_size = self.tile_size
-		tile_pad = self.tile_pad
-		tile_fft = self.tile_fft
-		tile_res = self.tile_res
-		tile_buf = self.tile_buf
-		tile_tem = self.tile_tem
+		patch_overlap = self.patch_overlap
+		patch_size = self.patch_size
+		patch_pad = self.patch_pad
+		patch_fft = self.patch_fft
+		patch_res = self.patch_res
+		patch_buf = self.patch_buf
+		patch_tem = self.patch_tem
 	
 		# use cycle to repeat the single PSF or iterate normally if multiple PSFs exist
 		psf_ffts = cycle(self.psf_fft) if len(self.psf_fft) == 1 else iter(self.psf_fft)
-		tiles = self.tiled(image)
+		patches = self.patched(image)
 		flat_field = flat_field if flat_field is None or flat_field.ndim == image.ndim else flat_field[np.newaxis] 
-		flats = cycle([(None,None,None)]) if flat_field is None else self.tiled(flat_field)
+		flats = cycle([(None,None,None)]) if flat_field is None else self.patched(flat_field)
 	
 		# the big loop
-		for (x,y,tile),(_,_,flat),psf_fft in zip(tiles, flats, psf_ffts):
-			zdim,xdim,ydim = tile.shape
-			xstart = overlap if x == 0 else 0
-			ystart = overlap if y == 0 else 0
+		for (x,y,patch),(_,_,flat),psf_fft in zip(patches, flats, psf_ffts):
+			zdim,xdim,ydim = patch.shape
+			xstart = patch_overlap if x == 0 else 0
+			ystart = patch_overlap if y == 0 else 0
 			xend = xdim
 			yend = ydim
 			
-			tile_pad[:] = 0.0
-			tile_pad[ zpad:zpad+zdim, xstart:xstart+xdim, ystart:ystart+ydim] = tile      # fill
+			patch_pad[:] = 0.0
+			patch_pad[ zpad:zpad+zdim, xstart:xstart+xdim, ystart:ystart+ydim] = patch      # fill
 		
 			# flat field correction
 			if flat_field is not None:
 				mask = (slice(zpad,-zpad), slice(xstart,xstart+xdim), slice(ystart,ystart+ydim))
-				cp.divide(tile_pad[mask], flat, out=tile_pad[mask])
+				cp.divide(patch_pad[mask], flat, out=patch_pad[mask])
 
 			# x reflect at left and right
 			if x == 0:
-				reflect(tile_pad, overlap, mode='in', axis=1, out=tile_pad)
-				xend += overlap
-			elif xdim < tile_size + (2 * overlap):
-				reflect(tile_pad, xdim-1, mode='out', axis=1, out=tile_pad)
-				xend += overlap
+				reflect(patch_pad, patch_overlap, mode='in', axis=1, out=patch_pad)
+				xend += patch_overlap
+			elif xdim < patch_size + (2 * patch_overlap):
+				reflect(patch_pad, xdim-1, mode='out', axis=1, out=patch_pad)
+				xend += patch_overlap
 			# y reflect at top and bottom
 			if y == 0:
-				reflect(tile_pad, overlap, mode='in', axis=2, out=tile_pad)
-				yend += overlap
-			elif ydim < tile_size + (2 * overlap):
-				reflect(tile_pad, ydim-1, mode='out', axis=2, out=tile_pad)
-				yend += overlap
+				reflect(patch_pad, patch_overlap, mode='in', axis=2, out=patch_pad)
+				yend += patch_overlap
+			elif ydim < patch_size + (2 * patch_overlap):
+				reflect(patch_pad, ydim-1, mode='out', axis=2, out=patch_pad)
+				yend += patch_overlap
 			# z reflect down
-			reflect(tile_pad, zpad, mode='in', axis=0, out=tile_pad)
+			reflect(patch_pad, zpad, mode='in', axis=0, out=patch_pad)
 			# z relfect up
-			reflect(tile_pad, zpad+zdim-1, mode='out', axis=0, out=tile_pad)
-			#tile_pad[:zpad, :, :] = tile_pad[zpad, :, :]
-			#tile_pad[-zpad:, :, :] = tile_pad[zpad+zdim-1, :, :]
-			#tile_pad[zpad - zdim:zpad, :, :] = tile_pad[zpad:zpad+zdim, :, :][::-1, :, :]
-			#tile_pad[zpad + zdim:zpad + zdim + zpad, :, :] = tile_pad[zdim:zpad+zdim, :, :][::-1, :, :]
+			reflect(patch_pad, zpad+zdim-1, mode='out', axis=0, out=patch_pad)
+			#patch_pad[:zpad, :, :] = patch_pad[zpad, :, :]
+			#patch_pad[-zpad:, :, :] = patch_pad[zpad+zdim-1, :, :]
+			#patch_pad[zpad - zdim:zpad, :, :] = patch_pad[zpad:zpad+zdim, :, :][::-1, :, :]
+			#patch_pad[zpad + zdim:zpad + zdim + zpad, :, :] = patch_pad[zdim:zpad+zdim, :, :][::-1, :, :]
 
 			# the fft convolution and deconvolution
-			tile_fft[:] = xp.fft.fftn(tile_pad)
-			xp.multiply(tile_fft, psf_fft, out=tile_fft)
-			tile_res[:] = xp.fft.ifftn(tile_fft)[zpad:-zpad].real
+			patch_fft[:] = xp.fft.fftn(patch_pad)
+			xp.multiply(patch_fft, psf_fft, out=patch_fft)
+			patch_res[:] = xp.fft.ifftn(patch_fft)[zpad:-zpad].real
 
 			# optional blur subtraction
 			if blur_radius is not None:
-				blur.box_1d(tile_res, blur_radius, axis=1, out=tile_buf)
-				blur.box_1d(tile_buf, blur_radius, axis=2, out=tile_tem)
-				xp.subtract(tile_res, tile_tem, out=tile_res)
+				blur.box_1d(patch_res, blur_radius, axis=1, out=patch_buf)
+				blur.box_1d(patch_buf, blur_radius, axis=2, out=patch_tem)
+				xp.subtract(patch_res, patch_tem, out=patch_res)
 			
-			# flat field uncorrection - put tile_pad back so it matches the raw tile
+			# flat field uncorrection - put patch_pad back so it matches the raw patch
 			if flat_field is not None:
 				mask = (slice(zpad,-zpad), slice(xstart,xstart+xdim), slice(ystart,ystart+ydim))
-				cp.multiply(tile_pad[mask], flat, out=tile_pad[mask])
+				cp.multiply(patch_pad[mask], flat, out=patch_pad[mask])
 			
-			yield x,y,tile_res[:,:xend, :yend],tile_pad[zpad:-zpad, :xend, :yend]
+			yield x,y,patch_res[:,:xend, :yend],patch_pad[zpad:-zpad, :xend, :yend]
 
 	def apply(self, image, flat_field=None, blur_radius=None, output=None, **kwargs):
 		xp = cp.get_array_module(image)
 		if output is None:
 			output = xp.empty_like(image, dtype=xp.float32)
 
-		overlap = self.overlap
+		patch_overlap = self.patch_overlap
 		sz, sx, sy = image.shape
-		for x, y, tile, _ in self.tile_wise(image, flat_field=flat_field, blur_radius=blur_radius):
-				zdim,xdim,ydim = tile.shape
-				xdim -= (2 * overlap)
-				ydim -= (2 * overlap)
-				output[:, x:x+xdim, y:y+ydim] = tile[:,overlap:-overlap, overlap:-overlap]
+		for x, y, patch, _ in self.patch_wise(image, flat_field=flat_field, blur_radius=blur_radius):
+				zdim,xdim,ydim = patch.shape
+				xdim -= (2 * patch_overlap)
+				ydim -= (2 * patch_overlap)
+				output[:, x:x+xdim, y:y+ydim] = patch[:,patch_overlap:-patch_overlap, patch_overlap:-patch_overlap]
 		return output
 
-	def tiled(self, image):
+	def patched(self, image):
 		"""
-		Yield tiles of the image do reflected padding later
+		Yield patches of the image do reflected padding later
 		"""
 		xp = cp.get_array_module(image)
 		sz, sx, sy = image.shape
-		self.nx = int(xp.ceil(sx / self.tile_size))
-		self.ny = int(xp.ceil(sy / self.tile_size))
+		self.nx = int(xp.ceil(sx / self.patch_size))
+		self.ny = int(xp.ceil(sy / self.patch_size))
 
-		tile_size = self.tile_size
-		for x in range(0, sx, tile_size):
-			for y in range(0, sy, tile_size):
-				# Compute bounds with overlap
-				x_start = max(x - self.overlap, 0)
-				y_start = max(y - self.overlap, 0)
-				x_end = min(x + self.tile_size + self.overlap, sx)
-				y_end = min(y + self.tile_size + self.overlap, sy)
+		patch_size = self.patch_size
+		for x in range(0, sx, patch_size):
+			for y in range(0, sy, patch_size):
+				# Compute bounds with patch_overlap
+				x_start = max(x - self.patch_overlap, 0)
+				y_start = max(y - self.patch_overlap, 0)
+				x_end = min(x + self.patch_size + self.patch_overlap, sx)
+				y_end = min(y + self.patch_size + self.patch_overlap, sy)
 	
-				# Extract tile region
-				tile = image[:, x_start:x_end, y_start:y_end]
-				yield x, y, tile
+				# Extract patch region
+				patch = image[:, x_start:x_end, y_start:y_end]
+				yield x, y, patch
 
-	def untiled(self, image):
+	def unpatched(self, image):
 		"""
-		Reconstruct the original image from tiled representation.
+		Reconstruct the original image from patched representation.
 
 		Parameters:
 		-----------
-		tiled_image : ndarray
-			Stacked tiles with shape (num_tiles, sz, tile_size+2*overlap, tile_size+2*overlap)
+		patched_image : ndarray
+			Stacked patches with shape (num_tiles, sz, patch_size+2*patch_overlap, patch_size+2*patch_overlap)
 
 		Returns:
 		--------
@@ -218,18 +218,18 @@ class Deconvolver:
 			Reconstructed image with shape (sz, sx, sy)
 		"""
 
-		# Extract the usable part of each tile (removing the overlap)
-		out = image[:, :, self.overlap:-self.overlap, self.overlap:-self.overlap]
+		# Extract the usable part of each patch (removing the patch_overlap)
+		out = image[:, :, self.patch_overlap:-self.patch_overlap, self.patch_overlap:-self.patch_overlap]
 
-		# Reshape to organize tiles in a grid
-		out = out.reshape(self.ny, self.nx, self.sz, self.tile_size, self.tile_size)
+		# Reshape to organize patches in a grid
+		out = out.reshape(self.ny, self.nx, self.sz, self.patch_size, self.patch_size)
 		
 		# Transpose and reshape to reconstruct the image
-		#out = out.transpose(2, 0, 3, 1, 4).reshape(self.sz, self.ny * self.tile_size, self.nx * self.tile_size)
+		#out = out.transpose(2, 0, 3, 1, 4).reshape(self.sz, self.ny * self.patch_size, self.nx * self.patch_size)
 
-		out = out.reshape(self.ny, self.nx, self.sz, self.tile_size, self.tile_size)
+		out = out.reshape(self.ny, self.nx, self.sz, self.patch_size, self.patch_size)
 		out = cp.ascontiguousarray(out.transpose(2, 0, 3, 1, 4))  # Single contiguous conversion
-		out = out.reshape(self.sz, self.ny * self.tile_size, self.nx * self.tile_size)
+		out = out.reshape(self.sz, self.ny * self.patch_size, self.nx * self.patch_size)
 
 		return out
 
@@ -246,7 +246,7 @@ class Deconvolver:
 		"""
 		xp = cp.get_array_module(psf)  # Handle NumPy or CuPy
 
-		target_shape = xp.array([self.tile_height, self.tile_size, self.tile_size])
+		target_shape = xp.array([self.depth, self.patch_size, self.patch_size])
 		psf_shape = xp.array(psf.shape)
 		psff = xp.zeros(tuple(target_shape.tolist()), dtype=psf.dtype)  # Use same dtype for consistency
 	
@@ -267,13 +267,13 @@ class Deconvolver:
 
 		return psff
 
-def full_deconv(image, psfs, flat_field = None, tile_size=300, zpad = None, overlap = 1, beta = 0.001):
+def full_deconv(image, psfs, flat_field = None, patch_size=300, zpad = None, patch_overlap = 1, beta = 0.001):
 	xp = cp.get_array_module(image)
 
 	shape = image.shape
 	if zpad is None:
 		zpad = shape[0]
-	deconvolver = Deconvolver(psfs, channel_shape=shape, zpad=zpad, tile_size=tile_size, overlap=overlap, beta=beta)
+	deconvolver = Deconvolver(psfs, channel_shape=shape, zpad=zpad, patch_size=patch_size, patch_overlap=patch_overlap, beta=beta)
 	deconv = deconvolver.apply(image, flat_field)
 
 	del deconvolver

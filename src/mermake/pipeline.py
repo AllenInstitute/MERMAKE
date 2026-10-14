@@ -72,21 +72,21 @@ def process_dapi(image, queue, ctx):
 
 
 def find_hyb_maxima(chan, flat, ctx):
-	"""Deconvolve ``chan`` tile by tile and return the maxima kept from each tile.
+	"""Deconvolve ``chan`` patch by patch and return the maxima kept from each patch.
 
 	Returns a ``(n, 8)`` float32 cupy array in full-image coordinates.
 	"""
 	args = ctx.args
-	overlap = args.hybs.overlap
+	patch_overlap = args.hybs.patch_overlap
 	# there is probably a better way to do the Xh stacking
 	Xhf = []
-	for x, y, tile, raw in ctx.deconvolver.hybs.tile_wise(chan, flat, **vars(args.hybs)):
-		Xh = find_local_maxima(tile, raw=raw, **vars(args.hybs))
-		keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < cp.array([tile.shape[1] - overlap, tile.shape[2] - overlap])), axis=-1)
+	for x, y, patch, raw in ctx.deconvolver.hybs.patch_wise(chan, flat, **vars(args.hybs)):
+		Xh = find_local_maxima(patch, raw=raw, **vars(args.hybs))
+		keep = cp.all((Xh[:,1:3] >= patch_overlap) & (Xh[:,1:3] < cp.array([patch.shape[1] - patch_overlap, patch.shape[2] - patch_overlap])), axis=-1)
 		if cp.any(keep):
 			Xh = Xh[keep]
-			Xh[:,1] += x - overlap
-			Xh[:,2] += y - overlap
+			Xh[:,1] += x - patch_overlap
+			Xh[:,2] += y - patch_overlap
 			Xhf.append(Xh)
 	if Xhf:
 		return cp.vstack(Xhf)

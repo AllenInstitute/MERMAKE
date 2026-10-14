@@ -11,9 +11,9 @@ from mermake.points import estimate_step_size, points_to_coords
 
 class TestDictToNamespace:
 	def test_nested_sections(self):
-		ns = dict_to_namespace({"paths": {"psf_file": "a.npy"}, "hybs": {"tile_size": 500}})
+		ns = dict_to_namespace({"paths": {"psf_file": "a.npy"}, "hybs": {"patch_size": 500}})
 		assert ns.paths.psf_file == "a.npy"
-		assert ns.hybs.tile_size == 500
+		assert ns.hybs.patch_size == 500
 
 	def test_list_of_dicts(self):
 		ns = dict_to_namespace({"items": [{"a": 1}, 2]})
@@ -26,8 +26,8 @@ class TestDictToNamespace:
 
 	def test_vars_roundtrip_for_kwargs(self):
 		# the pipeline passes **vars(args.hybs) to the GPU functions
-		ns = dict_to_namespace({"hybs": {"tile_size": 500, "overlap": 89}})
-		assert vars(ns.hybs) == {"tile_size": 500, "overlap": 89}
+		ns = dict_to_namespace({"hybs": {"patch_size": 500, "patch_overlap": 89}})
+		assert vars(ns.hybs) == {"patch_size": 500, "patch_overlap": 89}
 
 
 class TestNamespaceToDict:
@@ -47,8 +47,8 @@ class TestNamespaceToArray:
 		assert ("", "gpu", "0") in rows
 
 	def test_accepts_namespaces(self):
-		ns = SimpleNamespace(hybs=SimpleNamespace(tile_size=500))
-		assert namespace_to_array(ns) == [("hybs", "tile_size", "500")]
+		ns = SimpleNamespace(hybs=SimpleNamespace(patch_size=500))
+		assert namespace_to_array(ns) == [("hybs", "patch_size", "500")]
 
 	def test_deeper_nesting(self):
 		rows = namespace_to_array({"a": {"b": {"c": 1}}})

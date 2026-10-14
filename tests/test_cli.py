@@ -12,7 +12,7 @@ psf_file = 'psf.npy'
 hyb_folders = ['exp']
 
 [hybs]
-tile_size = 500
+patch_size = 500
 """
 
 
@@ -27,7 +27,7 @@ class TestIsValidFile:
 	def test_loads_toml(self, toml_file):
 		settings = cli.is_valid_file(toml_file)
 		assert settings["paths"]["psf_file"] == "psf.npy"
-		assert settings["hybs"]["tile_size"] == 500
+		assert settings["hybs"]["patch_size"] == 500
 
 	def test_missing_file(self, tmp_path):
 		with pytest.raises(argparse.ArgumentTypeError, match="does not exist"):

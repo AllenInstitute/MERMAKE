@@ -48,6 +48,14 @@ def build_parser(prog=None):
 		help="Print every setting with its description and the value that would be used, then exit")
 	parser.add_argument('--dry-run', action="store_true",
 		help="Validate the settings and list the images that would be processed, then exit")
+	parser.add_argument('--suggest-threshold', action="store_true",
+		help="Sample a few images, count the spots found at every threshold and suggest values "
+		     "for the threshold settings, then exit. Needs a GPU")
+	parser.add_argument('--sample-images', type=int, default=3,
+		help="Number of random images --suggest-threshold uses [3]")
+	parser.add_argument('--max-false-positives', type=float, default=0.3,
+		help="Largest estimated fraction of false positives --suggest-threshold accepts, "
+		     "larger values give lower thresholds [0.3]")
 	return parser
 
 
@@ -86,5 +94,9 @@ def main(argv=None):
 	os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
 	from mermake.gpu.runtime import check_cuda
 	check_cuda()
+	if args.suggest_threshold:
+		from mermake.threshold import suggest
+		suggest(args, n_images=args.sample_images, max_fp=args.max_false_positives)
+		return
 	from mermake.pipeline import run
 	run(args)

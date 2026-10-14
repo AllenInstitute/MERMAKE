@@ -8,6 +8,7 @@ All notable changes to MERMAKE. The format follows [Keep a Changelog](https://ke
 
 - Spots are written as a Parquet dataset partitioned by set and field of view (`spots.parquet`), together with per-image statistics (`diagnostics.parquet`). The new `[output] format` setting selects `parquet`, `npz` or `both`.
 - `mermake-report`, which plots the spot score distributions of each channel across rounds and heatmaps of spot counts and deconvolved/raw signal. Needs the new `report` extra.
+- `mermake --suggest-threshold` samples a few images, counts the spots found at every threshold (and in the negated image as a noise estimate) and suggests values for `threshold`. See the configuration page.
 - `pyarrow` is now a dependency.
 
 ### Changed

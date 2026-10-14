@@ -159,3 +159,15 @@ def test_parquet_spots_and_diagnostics(run_output):
 	assert len(hyb0) == len(data["Xh"])
 	diagnostics = spots.open_dataset(str(out), spots.DIAGNOSTICS_DIR).to_table()
 	assert diagnostics.num_rows >= 3
+
+
+def test_suggest_threshold(tmp_path):
+	write_fov(tmp_path)
+	write_psf_and_flats(tmp_path)
+	settings = write_settings(tmp_path, tmp_path / "out")
+	proc = subprocess.run([sys.executable, "-m", "mermake", "--suggest-threshold",
+	                       "--sample-images", "1", str(settings)],
+	                      capture_output=True, text=True, timeout=600)
+	assert proc.returncode == 0, proc.stderr[-2000:]
+	assert "channel 0" in proc.stdout and "channel dapi" in proc.stdout
+	assert "Suggested thresholds" in proc.stdout

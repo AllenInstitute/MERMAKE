@@ -73,8 +73,11 @@ def process_dapi(image, queue, ctx):
 	ctx.executor.submit(queue.save_results, image, icol, stats)
 
 
-def find_hyb_maxima(chan, flat, ctx):
+def find_hyb_maxima(chan, flat, ctx, negate=False, **overrides):
 	"""Deconvolve ``chan`` patch by patch and return the maxima kept from each patch.
+
+	``negate`` finds the maxima of the negated image, and ``overrides`` replace settings of
+	``[hybs]`` (such as ``threshold``) for this call. Both are used by ``--suggest-threshold``.
 
 	Returns
 	-------
@@ -86,6 +89,7 @@ def find_hyb_maxima(chan, flat, ctx):
 	    them were dropped for lying in the overlap margin.
 	"""
 	args = ctx.args
+	params = {**vars(args.hybs), **overrides}
 	patch_overlap = args.hybs.patch_overlap
 	# there is probably a better way to do the Xh stacking
 	Xhf = []
@@ -95,7 +99,9 @@ def find_hyb_maxima(chan, flat, ctx):
 	for x, y, patch, raw in ctx.deconvolver.hybs.patch_wise(chan, flat, **vars(args.hybs)):
 		raw_sum += raw.sum(dtype=cp.float64)
 		deconv_sum += patch.sum(dtype=cp.float64)
-		Xh = find_local_maxima(patch, raw=raw, **vars(args.hybs))
+		if negate:
+			cp.multiply(patch, -1, out=patch)
+		Xh = find_local_maxima(patch, raw=raw, **params)
 		n_candidates += Xh.shape[0]
 		keep = cp.all((Xh[:,1:3] >= patch_overlap) & (Xh[:,1:3] < cp.array([patch.shape[1] - patch_overlap, patch.shape[2] - patch_overlap])), axis=-1)
 		if cp.any(keep):

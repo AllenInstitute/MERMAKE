@@ -22,6 +22,7 @@ dependencies = [
     "zarr",
     "scipy",
     "scikit-learn",
+    "pyarrow",
     'tomli; python_version < "3.11"',
 ]
 
@@ -29,6 +30,7 @@ dependencies = [
 cuda12 = ["cupy-cuda12x[ctk]"]
 cuda11 = ["cupy-cuda11x[ctk]"]
 viz = ["napari"]
+report = ["matplotlib"]
 
 [project.urls]
 Homepage = "https://github.com/AllenInstitute/MERMAKE"
@@ -36,9 +38,10 @@ Upstream = "https://github.com/deprekate/mermake"
 
 [project.scripts]
 mermake = "mermake.cli:main"
+mermake-report = "mermake.report:main"
 
 [dependency-groups]
-dev = ["pytest", "ruff"]
+dev = ["pytest", "ruff", "matplotlib"]
 docs = ["mkdocs-material", "mkdocstrings[python]"]
 
 [tool.uv]

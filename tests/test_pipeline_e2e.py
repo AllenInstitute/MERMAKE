@@ -81,6 +81,9 @@ def write_settings(root, out):
 	hybs = section.format(patch=NY, overlap=OVERLAP, beta=0.0001, threshold=1000, blur=20, delta=1, delta_fit=3)
 	dapi = section.format(patch=NY, overlap=OVERLAP, beta=0.01, threshold=3.0, blur=20, delta=2, delta_fit=3)
 	text = textwrap.dedent(f"""\
+		[output]
+		format = 'both'
+
 		[paths]
 		psf_file = '{root / "psf.npy"}'
 		flat_field_tag = '{root / "flat_"}'
@@ -142,3 +145,17 @@ def test_dapi_spots_detected(run_output):
 	_, out = run_output
 	data = np.load(out / "Conv_zscan__000--H1_TEST_set1--dapiFeatures.npz")
 	assert_spots_found(data["Xh_plus"], SPOTS[2])
+
+
+def test_parquet_spots_and_diagnostics(run_output):
+	_, out = run_output
+	from mermake.io import spots
+	table = spots.open_dataset(str(out)).to_table()
+	assert {"iset", "ifov", "ih", "icol", "kind", "h"} <= set(table.column_names)
+	assert set(table.column("kind").to_pylist()) >= {"hyb", "dapi_plus"}
+	import pyarrow.compute as pc
+	hyb0 = table.filter(pc.equal(table.column("icol"), 0)).column("z").to_numpy()
+	data = np.load(out / "Conv_zscan__000--H1_TEST_set1--col0__Xhfits.npz")
+	assert len(hyb0) == len(data["Xh"])
+	diagnostics = spots.open_dataset(str(out), spots.DIAGNOSTICS_DIR).to_table()
+	assert diagnostics.num_rows >= 3

@@ -32,6 +32,10 @@ def render():
 	for r in (r for r in rows if r["section"] == "hybs"):
 		out.append(f"| `{r['key']}` | {r['type']} | {r['unit'] or ''} | {_value(r['default'])} | "
 		           f"{_value(dapi[r['key']]['default'])} | {_cell(r['doc'])} |")
+	out += ["", "### `[output]`", "",
+	        "| Key | Type | Default | Description |", "|---|---|---|---|"]
+	for r in (r for r in rows if r["section"] == "output"):
+		out.append(f"| `{r['key']}` | {r['type']} | {_value(r['default'])} | {_cell(r['doc'])} |")
 	return "\n".join(out)
 
 

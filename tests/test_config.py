@@ -188,3 +188,16 @@ class TestDocs:
 	def test_packaged_example_is_valid(self):
 		cfg = Config.from_dict(tomllib.loads(cli.example_text()), check_files=False)
 		assert cfg.paths.hyb_range == "H1_BICAN_set1:H16_BICAN_set1"
+
+
+class TestOutput:
+	def test_default_is_parquet(self):
+		assert load().output.format == "parquet"
+
+	@pytest.mark.parametrize("fmt", ["parquet", "npz", "both"])
+	def test_valid_formats(self, fmt):
+		assert load(output=dict(format=fmt)).output.format == fmt
+
+	def test_invalid_format(self):
+		with pytest.raises(ConfigError, match="format must be one of"):
+			load(output=dict(format="csv"))

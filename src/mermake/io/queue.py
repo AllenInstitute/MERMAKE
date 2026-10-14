@@ -1,4 +1,5 @@
 """Prefetching queue of images, and the per-fov blocks used for drift correction."""
+import json
 import os
 from pathlib import Path
 import queue
@@ -10,6 +11,7 @@ from .. import __version__
 from .readers import read_im, Container
 from .naming import get_ih, get_ifov, get_iset, FolderFilter
 from ..config import namespace_to_array
+from . import spots
 
 class Block(list):
 	"""The images of one field of view, one per round, that are drift corrected together.
@@ -71,6 +73,7 @@ class ImageQueue:
 		self.args = args
 		self.args_array = namespace_to_array(self.args.settings)
 		self.__dict__.update(vars(args.paths))
+		self.output_format = args.settings.output.format
 
 		os.makedirs(self.output_folder, exist_ok = True)
 		
@@ -122,26 +125,22 @@ class ImageQueue:
 
 		# check if the fov has been fitted
 		# we should test whether the load worked!!!!!!!!!!
-		for icol in range(self.shape[0] - 1):
-			filename = self.get_name(path, icol)
-			filepath = os.path.join(self.output_folder, filename)
-			# only compute if the image has not been processed
-			if not os.path.exists(filepath):
-				container[icol].compute()
-			else:
-				Xh = cp.load(filepath)['Xh']
-				setattr(container, f'col{icol}', Xh)
-		icol = -1
-		filename = self.get_name(path, icol)
-		filepath = os.path.join(self.output_folder, filename)
-		if not os.path.exists(filepath):
-			container[icol].compute()
-		else:
-			container.Xh_plus = cp.load(filepath)['Xh_plus']
-			container.Xh_minus = cp.load(filepath)['Xh_minus']
-		# attach drift file to container
 		iset = get_iset(path)
 		ifov = get_ifov(path)
+		ih = get_ih(os.path.dirname(path))
+		for icol in range(self.shape[0] - 1):
+			# only compute if the image has not been processed
+			if not self._is_done(path, icol):
+				container[icol].compute()
+			else:
+				setattr(container, f'col{icol}', self._load(path, icol, 'Xh'))
+		icol = -1
+		if not self._is_done(path, icol):
+			container[icol].compute()
+		else:
+			container.Xh_plus = self._load(path, icol, 'Xh_plus')
+			container.Xh_minus = self._load(path, icol, 'Xh_minus')
+		# attach drift file to container
 		#filename = self.drift_save.format(ifov=ifov, iset=iset)
 		filename = self.get_name(path)
 		filepath = os.path.join(self.output_folder, filename)
@@ -154,6 +153,7 @@ class ImageQueue:
 			container.drift_ref_path = ref_path
 		container.iset = iset
 		container.ifov = ifov
+		container.ih = ih
 		return container
 
 	def _worker(self):
@@ -271,17 +271,60 @@ class ImageQueue:
 			return self.hyb_save.format(fov=fov, tag=tag, icol=icol)
 
 
-	def _is_fitted(self, path):
-		for icol in range(self.shape[0] - 1):
-			filename = self.get_name(path, icol)
-			filepath = os.path.join(self.output_folder, filename)
-			if not os.path.exists(filepath):
+	def _is_done(self, path, icol):
+		"""Whether the results of channel ``icol`` of the image at ``path`` are all on disk.
+
+		With ``format = "both"`` the channel is only done when both formats exist.
+		"""
+		if self.output_format in ('npz', 'both'):
+			if not os.path.exists(os.path.join(self.output_folder, self.get_name(path, icol))):
 				return False
-		filename = self.get_name(path, -1)
-		filepath = os.path.join(self.output_folder, filename)
-		if not os.path.exists(filepath):
-			return False
+		if self.output_format in ('parquet', 'both'):
+			if not spots.spots_exist(self.output_folder, get_iset(path), get_ifov(path),
+			                         get_ih(os.path.dirname(path)), icol):
+				return False
 		return True
+
+	def _is_fitted(self, path):
+		return all(self._is_done(path, icol) for icol in (*range(self.shape[0] - 1), -1))
+
+	def _load(self, path, icol, key):
+		"""Load the maxima ``key`` of a finished channel, from parquet if that is a selected format."""
+		if self.output_format in ('parquet', 'both'):
+			parts = spots.read_spots(self.output_folder, get_iset(path), get_ifov(path),
+			                         get_ih(os.path.dirname(path)), icol)
+			Xh = parts[{'Xh': spots.KIND_HYB, 'Xh_plus': spots.KIND_DAPI_PLUS,
+			            'Xh_minus': spots.KIND_DAPI_MINUS}[key]]
+			return cp.asarray(Xh)
+		return cp.load(os.path.join(self.output_folder, self.get_name(path, icol)))[key]
+
+	def save_results(self, image, icol=-1, stats=None):
+		"""Save one channel of ``image`` in the selected output format(s). Runs in the save executor.
+
+		Parameters
+		----------
+		stats : dict, optional
+		    Extra statistics for the diagnostics table, a ``{kind: {name: value}}`` dict whose
+		    names are in ``mermake.io.spots.EXTRA_STATS``. Only written with the parquet format.
+		"""
+		if self.output_format in ('npz', 'both'):
+			self.save_xfits(image, icol)
+		if self.output_format in ('parquet', 'both'):
+			self.save_parquet(image, icol, stats or {})
+
+	def save_parquet(self, image, icol, stats):
+		"""Write the maxima and the statistics of one channel to the parquet datasets."""
+		if icol == -1:
+			parts = {spots.KIND_DAPI_PLUS: image.Xh_plus, spots.KIND_DAPI_MINUS: image.Xh_minus}
+		else:
+			parts = {spots.KIND_HYB: getattr(image, f'col{icol}')}
+		parts = {kind: cp.asnumpy(Xh) for kind, Xh in parts.items()}
+		iset, ifov, ih = image.iset, image.ifov, image.ih
+		metadata = {'version': __version__,
+		            'args': json.dumps(self.args_array)}
+		spots.write_spots(self.output_folder, iset, ifov, ih, icol, parts, metadata)
+		rows = {kind: spots.spot_stats(Xh, **stats.get(kind, {})) for kind, Xh in parts.items()}
+		spots.write_stats(self.output_folder, iset, ifov, ih, icol, rows)
 
 	def save_xfits(self, image, icol=-1, attempt=1, max_attempts=3):
 		"""Save the maxima of one channel of ``image`` to the output folder, unless the file exists.

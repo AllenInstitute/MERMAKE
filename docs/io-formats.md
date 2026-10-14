@@ -39,7 +39,32 @@ Every file that matches `<flat_field_tag>*` is a flat field, in sorted order, on
 
 ## Output
 
-Everything goes to `output_folder`. The names come from the templates in `[paths]`, with `{fov}` the name of the zarr entry without the extension (`Conv_zscan__020`) and `{tag}` the round folder (`H1_BICAN_set1`).
+Everything goes to `output_folder`. `[output] format` selects how the spots are written: `parquet` (the default), `npz` (the older one-file-per-channel layout) or `both`.
+
+### Parquet dataset (default)
+
+```
+spots.parquet/iset=<set>/ifov=<fov>/part-<kind>-r<round>-c<channel>.parquet
+diagnostics.parquet/iset=<set>/ifov=<fov>/part-<kind>-r<round>-c<channel>.parquet
+```
+
+The datasets are partitioned by set and field of view, so a later step that compares spots across rounds and channels can give one `ifov` directory to each worker. One part is written per image and channel, and a part only appears once complete, so an interrupted run resumes cleanly. `iset` and `ifov` are in the directory names, and read as columns with `pyarrow.dataset`:
+
+```python
+import pyarrow.dataset as ds
+from mermake.io import spots
+table = spots.open_dataset("output_folder").to_table(filter=ds.field("ifov") == 3)
+```
+
+`spots.parquet` has one row per maximum with the columns `kind` (`hyb`, `dapi_plus` or `dapi_minus`), `ih` (round number), `icol` (color channel, `-1` for dapi) and the 8 columns `z, x, y, background, a, habs, hn, h` described [below](#maxima-xh-xh_plus-xh_minus). The schema metadata holds `version` and `args`.
+
+`diagnostics.parquet` has one row per image channel (and kind): `n_spots`, the 5th, 50th and 95th percentile (`_p05`, `_p50`, `_p95`) of `background`, `a`, `habs`, `hn` and `h`, and for color channels `raw_sum` and `deconv_sum` (sums over all patches of the raw and the deconvolved data), `n_candidates` and `n_edge_dropped` (maxima found, and dropped for lying in the overlap margin of a patch). For dapi, `std_val` is the standard deviation the deconvolved image is divided by. Statistics are not recomputed for results that already exist.
+
+### Plots
+
+`mermake-report <output_folder>` (needs `pip install mermake[report]`, no GPU) writes PNGs to `<output_folder>/report`: for each color channel the distribution of `h`, `habs` and `hn` with one curve per round, and round by channel heatmaps of the number of spots and of `deconv_sum / raw_sum`.
+
+### npz files The names come from the templates in `[paths]`, with `{fov}` the name of the zarr entry without the extension (`Conv_zscan__020`) and `{tag}` the round folder (`H1_BICAN_set1`).
 
 | File | Default name | Contents |
 |---|---|---|

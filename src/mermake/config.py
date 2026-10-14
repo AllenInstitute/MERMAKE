@@ -124,6 +124,20 @@ class Params:
 		unit="voxels")
 
 
+OUTPUT_FORMATS = ("parquet", "npz", "both")
+
+
+@dataclass(kw_only=True)
+class Output:
+	"""The ``[output]`` section: how results are written."""
+	format: str = _f(
+		"Format of the spot results. `parquet` writes a dataset under `<output_folder>/spots.parquet`, "
+		"partitioned by set and field of view so that later steps can process one field of view at a "
+		"time, plus per-image statistics under `<output_folder>/diagnostics.parquet`. `npz` writes the "
+		"legacy one-file-per-channel `.npz` files. `both` writes both.",
+		default="parquet")
+
+
 DEFAULTS = {
 	"hybs": dict(patch_size=500, patch_overlap=89, beta=0.0001, threshold=3600, blur_radius=30,
 	             delta=1, delta_fit=3, sigmaZ=1, sigmaXY=1.5),
@@ -131,7 +145,7 @@ DEFAULTS = {
 	             delta=5, delta_fit=5, sigmaZ=1, sigmaXY=1.5),
 }
 
-SECTIONS = {"paths": Paths, "hybs": Params, "dapi": Params}
+SECTIONS = {"paths": Paths, "hybs": Params, "dapi": Params, "output": Output}
 
 # keys that used to exist, with what to tell the user
 RETIRED = {
@@ -148,6 +162,7 @@ class Config:
 	paths: Paths
 	hybs: Params
 	dapi: Params
+	output: Output
 
 	@classmethod
 	def from_file(cls, path, **kwargs):
@@ -199,6 +214,9 @@ class Config:
 		for name in ("hybs", "dapi"):
 			if sections.get(name) is not None:
 				_check_params(sections[name], name, errors)
+		if sections.get("output") is not None and sections["output"].format not in OUTPUT_FORMATS:
+			errors.append(f"[output] format must be one of {', '.join(OUTPUT_FORMATS)}, "
+			              f"got {sections['output'].format!r}")
 		if errors:
 			raise ConfigError("\n".join(f"  - {e}" for e in errors))
 		return cls(**sections)

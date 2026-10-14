@@ -11,6 +11,7 @@ from .align import drift, drift_save
 from .deconvolver import Deconvolver
 from .io.queue import ImageQueue, Block
 from .io.readers import load_flats
+from .io.spots import KIND_HYB, KIND_DAPI_PLUS, KIND_DAPI_MINUS
 from .maxima import find_local_maxima
 
 _last_len = 0
@@ -27,8 +28,8 @@ def print_clean(msg):
 
 
 def build_config(args):
-	"""Expose the sections of the validated settings as ``args.paths``, ``args.hybs`` and ``args.dapi``."""
-	for name in ("paths", "hybs", "dapi"):
+	"""Expose the sections of the validated settings as ``args.paths``, ``args.hybs``, ``args.dapi`` and ``args.output``."""
+	for name in ("paths", "hybs", "dapi", "output"):
 		setattr(args, name, getattr(args.settings, name))
 	return args
 
@@ -67,29 +68,45 @@ def process_dapi(image, queue, ctx):
 	# save the data
 	setattr(image, 'Xh_plus', Xh_plus)
 	setattr(image, 'Xh_minus', Xh_minus)
-	ctx.executor.submit(queue.save_xfits, image, icol)
+	# the std is the only dapi diagnostic that is not derived from the spots
+	stats = {KIND_DAPI_PLUS: dict(std_val=std_val), KIND_DAPI_MINUS: dict(std_val=std_val)}
+	ctx.executor.submit(queue.save_results, image, icol, stats)
 
 
 def find_hyb_maxima(chan, flat, ctx):
 	"""Deconvolve ``chan`` patch by patch and return the maxima kept from each patch.
 
-	Returns a ``(n, 8)`` float32 cupy array in full-image coordinates.
+	Returns
+	-------
+	Xh : cupy.ndarray
+	    ``(n, 8)`` float32 spots in full-image coordinates.
+	stats : dict
+	    Diagnostics of the call: the sums over all patches (including their overlap margins) of
+	    the raw and the deconvolved data, the number of candidate maxima found and how many of
+	    them were dropped for lying in the overlap margin.
 	"""
 	args = ctx.args
 	patch_overlap = args.hybs.patch_overlap
 	# there is probably a better way to do the Xh stacking
 	Xhf = []
+	raw_sum = cp.zeros((), dtype=cp.float64)
+	deconv_sum = cp.zeros((), dtype=cp.float64)
+	n_candidates = 0
 	for x, y, patch, raw in ctx.deconvolver.hybs.patch_wise(chan, flat, **vars(args.hybs)):
+		raw_sum += raw.sum(dtype=cp.float64)
+		deconv_sum += patch.sum(dtype=cp.float64)
 		Xh = find_local_maxima(patch, raw=raw, **vars(args.hybs))
+		n_candidates += Xh.shape[0]
 		keep = cp.all((Xh[:,1:3] >= patch_overlap) & (Xh[:,1:3] < cp.array([patch.shape[1] - patch_overlap, patch.shape[2] - patch_overlap])), axis=-1)
 		if cp.any(keep):
 			Xh = Xh[keep]
 			Xh[:,1] += x - patch_overlap
 			Xh[:,2] += y - patch_overlap
 			Xhf.append(Xh)
-	if Xhf:
-		return cp.vstack(Xhf)
-	return cp.zeros([0,8], dtype=cp.float32)
+	Xh = cp.vstack(Xhf) if Xhf else cp.zeros([0,8], dtype=cp.float32)
+	stats = dict(raw_sum=float(raw_sum), deconv_sum=float(deconv_sum), n_candidates=n_candidates,
+	             n_edge_dropped=n_candidates - Xh.shape[0])
+	return Xh, stats
 
 
 def process_hyb_channel(image, icol, queue, ctx):
@@ -98,9 +115,9 @@ def process_hyb_channel(image, icol, queue, ctx):
 	if isinstance(data, da.Array):
 		return
 	ctx.chan.set(data)
-	Xhf = find_hyb_maxima(ctx.chan, ctx.flats[icol], ctx)
+	Xhf, stats = find_hyb_maxima(ctx.chan, ctx.flats[icol], ctx)
 	setattr(image, f'col{icol}', Xhf)
-	ctx.executor.submit(queue.save_xfits, image, icol)
+	ctx.executor.submit(queue.save_results, image, icol, {KIND_HYB: stats})
 
 
 def finish_block(image, ctx):

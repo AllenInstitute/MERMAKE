@@ -85,8 +85,9 @@ def view_napari(queue, deconvolver, args ):
 	#cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
 	from mermake.deconvolver import Deconvolver
 	from mermake.maxima import find_local_maxima
-	from mermake.io import load_flats
-	from mermake.io import ImageQueue, dict_to_namespace
+	from mermake.io.readers import load_flats
+	from mermake.io.queue import ImageQueue
+	from mermake.config import dict_to_namespace
 
 	image = next(queue)
 	buffer = deconvolver.buffer
@@ -157,7 +158,9 @@ def main():
 	#cp.cuda.Device(0).use() # The above export doesnt always work so force CuPy to use GPU 0
 	from mermake.deconvolver import Deconvolver
 	from mermake.maxima import find_local_maxima
-	from mermake.io import load_flats, ImageQueue, dict_to_namespace, Block
+	from mermake.io.readers import load_flats
+	from mermake.io.queue import ImageQueue, Block
+	from mermake.config import dict_to_namespace
 	from mermake.gpu import elementwise
 	#from mermake.io import dict_to_namespace
 	#from mermake.image_queue import ImageQueue

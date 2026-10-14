@@ -10,7 +10,7 @@ except ImportError:
 	import numpy as cp
 	CUPY_AVAILABLE = False
 
-from mermake.io import read_im
+from mermake.io.readers import read_im
 
 from mermake.deconvolver import (
 	laplacian_3d, 

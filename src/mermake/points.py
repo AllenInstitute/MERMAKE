@@ -1,15 +1,6 @@
-import os
-import re
-import glob
-from pathlib import Path
-from collections import Counter
-
 import numpy as np
+from scipy.spatial import KDTree
 
-class Config:
-	def __init__(self, args):
-		self.args = args
-		self.some_data = 'foo'
 
 def find_two_means(values):
 	from sklearn.cluster import KMeans
@@ -37,39 +28,3 @@ def points_to_coords(points):
 	mean = estimate_step_size(points)
 	coords = np.round(points / mean).astype(int)
 	return coords
-
-
-def count_bits(args):
-	group = args.config['codebooks'][0]
-	with open(group['codebook_path'], 'r') as fp:
-		return next(fp).rstrip().count('bit')
-
-def count_colors(args):
-	batch = args.batch
-	sset = next(iter(batch))
-	fov = next(iter(batch[sset]))
-	hyb = next(iter(batch[sset][fov]))
-	dic = batch[sset][fov][hyb]
-
-	path = dic['zarr']
-	dirname = os.path.dirname(path)
-	basename = os.path.basename(path)
-	file = glob.glob(os.path.join(dirname,'*' + basename + '.xml'))[0]
-	colors = get_xml_field(file, 'z_offsets').split(':')[-1]
-	return int(colors)
-
-def count_hybs(args):
-	bits = count_bits(args)
-	colors = count_colors(args) - 1
-	num = bits / colors
-	print(num)
-	print(args)
-
-if __name__ == "__main__":
-	# wcmatch requires ?*+@ before the () group pattern 
-	print(regex_path)
-	print(files)
-
-
-
-

@@ -7,16 +7,15 @@
 ```
 <hyb_folders entry>/
   H1_BICAN_set1/                  one folder per hybridization round ("tag")
-    Conv_zscan__020.zarr/         one entry per field of view
+    Conv_zscan__020.zarr/         one entry per field of view, the zarr array with the images
     Conv_zscan__020.xml           metadata written by the microscope
-    020/data/                     the zarr array with the images
   H2_BICAN_set1/
     ...
 ```
 
 - Round folders are selected with `hyb_range` and `regex`. The default `regex` splits a name like `H1_BICAN_set1` into prefix (`H`), round number (`1`), middle part (`BICAN`), set number (`1`) and suffix.
 - The field of view number is the last number before `.zarr` in the entry name (`020`). The set number is the number after `_set` in the round folder name.
-- MERMAKE uses the *name* of the `Conv_zscan__020.zarr` entry to find the field of view, and reads the images from the zarr array `020/data` next to it.
+- The `Conv_zscan__020.zarr` entry is the zarr array itself. Older acquisitions have a zarr group there instead and keep the array in `020/data/`, next to the entry. MERMAKE reads either: if the entry holds a `.zarray` it is the array, otherwise the array is `020/data`, where `020` is the field of view number taken from the name of the entry.
 
 ### The zarr array and the XML
 
@@ -35,7 +34,7 @@ The PSF is cropped or zero padded to `(depth, patch_size, patch_size)` and norma
 
 ### Flat fields
 
-Every file that matches `<flat_field_tag>*` is a flat field, in sorted order, one per channel with the dapi channel last. Each is an `.npz` with the 2D array `im`, at least as large as the image in y and x. It is center cropped, blurred over 20 x 20 pixels and divided by its median.
+Every file that matches `<flat_field_tag>*` is a flat field, in sorted order, one per channel with the dapi channel last. Each is either an `.npy` file holding a 2D array, or an `.npz` with the 2D array `im`, at least as large as the image in y and x. It is center cropped, blurred over 20 x 20 pixels and divided by its median.
 
 ## Output
 

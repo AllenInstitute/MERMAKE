@@ -10,6 +10,8 @@ All notable changes to MERMAKE. The format follows [Keep a Changelog](https://ke
 - `mermake-report`, which plots the spot score distributions of each channel across rounds and heatmaps of spot counts and deconvolved/raw signal. Needs the new `report` extra.
 - `mermake --suggest-threshold` samples a few images, counts the spots found at every threshold (and in the negated image as a noise estimate) and suggests values for `threshold`. See the configuration page.
 - `pyarrow` is now a dependency.
+- Flat fields can be `.npy` 2D arrays as well as `.npz` files with the array `im`.
+- Images are read from the `.zarr` entry itself when that is a zarr array, which is how current acquisition software writes them. The older `<fov>/data` layout is still read.
 
 ### Changed
 

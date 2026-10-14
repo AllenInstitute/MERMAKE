@@ -15,11 +15,19 @@ def center_crop(A, shape):
 	left = (W - w) // 2
 	return A[top:top+h, left:left+w]
 
+def _load_flat(file):
+	"""Read one flat field: a ``.npy`` 2D array, or an ``.npz`` with the 2D array ``im``."""
+	data = np.load(file)
+	if isinstance(data, np.lib.npyio.NpzFile):
+		with data:
+			return data['im']
+	return data
+
 def load_flats(flat_field_tag, shape=None, **kwargs):
 	"""Load the flat fields onto the GPU, one per color channel.
 
-	Every file matching ``<flat_field_tag>*`` (sorted by name) is read as the ``im`` array of an
-	``.npz``, center-cropped to the image size, box blurred over 20 x 20 pixels and divided by its
+	Every file matching ``<flat_field_tag>*`` (sorted by name) is read, either as a ``.npy`` 2D array or as
+	the ``im`` array of an ``.npz``, center-cropped to the image size, box blurred over 20 x 20 pixels and divided by its
 	median, so that the result is a unit-mean illumination profile.
 
 	Parameters
@@ -40,7 +48,7 @@ def load_flats(flat_field_tag, shape=None, **kwargs):
 	stack = list()
 	files = sorted(glob.glob(flat_field_tag + '*'))
 	for file in files:
-		im = np.load(file)['im']
+		im = _load_flat(file)
 		assert im.shape[-1] >= shape[-1] and im.shape[-2] >= shape[-2], 'flat field smaller than image'
 		if shape is not None:
 			im = center_crop(im, shape)
@@ -118,11 +126,24 @@ class Container:
 			return self
 
 
+def array_path(path):
+	"""Path of the zarr array of the field of view ``path``.
+
+	``path`` is the ``<name>_<fov>.zarr`` entry of a round folder. If that is itself a zarr array
+	(the layout written by current acquisition software) it is the answer. Older acquisitions
+	store a group there and keep the array in ``<round folder>/<fov>/data``.
+	"""
+	if os.path.exists(os.path.join(path, '.zarray')):
+		return path
+	fov = os.path.basename(path).split('_')[-1].split('.')[0]
+	return os.path.join(os.path.dirname(path), fov, 'data')
+
 def read_im(path, return_pos=False):
 	"""Open a field of view as a lazy dask array.
 
 	``path`` is the ``<name>_<fov>.zarr`` entry of a round folder. The data itself is the zarr
-	array ``<round folder>/<fov>/data``. The first plane is dropped. If ``<name>_<fov>.xml``
+	array at that path or, for older acquisitions, ``<round folder>/<fov>/data`` (see
+	:func:`array_path`). The first plane is dropped. If ``<name>_<fov>.xml``
 	exists, the remaining planes are reshaped to ``(channels, z, y, x)`` using the number of
 	channels, which is the last number of the ``z_offsets`` field (the dapi channel comes last).
 	8-bit images are squared and returned as uint16.
@@ -141,9 +162,7 @@ def read_im(path, return_pos=False):
 	x, y : float
 	    Stage position, only when ``return_pos`` is true.
 	"""
-	dirname = os.path.dirname(path)
-	fov = os.path.basename(path).split('_')[-1].split('.')[0]
-	file_ = os.path.join(dirname, fov, 'data')
+	file_ = array_path(path)
 
 	#z = zarr.open(file_, mode='r')
 	#image = np.array(z[1:])

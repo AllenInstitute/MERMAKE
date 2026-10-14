@@ -47,8 +47,8 @@ class Paths:
 		"(image depth, patch_size, patch_size) and normalized to sum to 1. With a dict, set "
 		"`patch_size` to the spacing of the sampling grid so each patch gets its own PSF.")
 	flat_field_tag: str = _f(
-		"Path prefix of the flat field files. Every file matching `<tag>*` is loaded (a `.npz` "
-		"with key `im`, one per color channel), box blurred and divided by its median.")
+		"Path prefix of the flat field files. Every file matching `<tag>*` is loaded (a `.npy` "
+		"2D array or a `.npz` with key `im`, one per color channel), box blurred and divided by its median.")
 	hyb_folders: List[str] = _f(
 		"Directories to search. Each holds one sub-directory per hybridization round, which in "
 		"turn holds one `.zarr` per field of view.")

@@ -17,7 +17,7 @@ import textwrap
 import typing
 from dataclasses import dataclass, field, fields, is_dataclass, MISSING
 from types import SimpleNamespace
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from .io.naming import FolderFilter
 
@@ -99,10 +99,12 @@ class Params:
 		"Regularization weight of the Laplacian term in the deconvolution filter "
 		"conj(H) / (|H|^2 + beta*|L|^2). Larger values give a smoother result with less "
 		"ringing but weaker deconvolution.")
-	threshold: float = _f(
+	threshold: Union[float, List[float]] = _f(
 		"A voxel is only a candidate maximum if it is brighter than this after deconvolution. "
-		"[hybs]: image intensity. [dapi]: units of the standard deviation of the deconvolved "
-		"image, because the dapi channel is divided by it first.")
+		"[hybs]: image intensity, either one number for all color channels or a list with one "
+		"number per color channel (all channels but the last, which is dapi). [dapi]: units of "
+		"the standard deviation of the deconvolved image, because the dapi channel is divided "
+		"by it first, and always one number.")
 	blur_radius: int = _f(
 		"Width of the xy box blur that is subtracted from each deconvolved patch (a high-pass "
 		"that removes diffuse background).", unit="pixels")
@@ -263,9 +265,9 @@ def reference_rows():
 
 def _type_name(tp):
 	if typing.get_origin(tp) is typing.Union:
-		return _type_name([a for a in typing.get_args(tp) if a is not type(None)][0])
+		return " or ".join(_type_name(a) for a in typing.get_args(tp) if a is not type(None))
 	if typing.get_origin(tp) in (list, List):
-		return "list of strings"
+		return f"list of {_type_name(typing.get_args(tp)[0])}s"
 	return {int: "integer", float: "number", str: "string"}[tp]
 
 
@@ -290,11 +292,22 @@ def _coerce(value, tp):
 	if typing.get_origin(tp) is typing.Union:
 		if value is None:
 			return None
-		return _coerce(value, [a for a in typing.get_args(tp) if a is not type(None)][0])
+		options = [a for a in typing.get_args(tp) if a is not type(None)]
+		messages = []
+		for option in options:
+			try:
+				return _coerce(value, option)
+			except TypeError as e:
+				messages.append(str(e))
+		raise TypeError(" or ".join(messages))
 	if typing.get_origin(tp) in (list, List):
-		if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
-			raise TypeError("a list of strings")
-		return list(value)
+		item = typing.get_args(tp)[0]
+		if not isinstance(value, list):
+			raise TypeError(f"a list of {_type_name(item)}s")
+		try:
+			return [_coerce(v, item) for v in value]
+		except TypeError:
+			raise TypeError(f"a list of {_type_name(item)}s") from None
 	if tp is int:
 		if isinstance(value, bool) or not isinstance(value, int):
 			raise TypeError("an integer")
@@ -345,6 +358,9 @@ def _check_params(p, section, errors):
 			errors.append(f"[{section}] {msg}")
 	need(p.patch_size >= 1, f"patch_size must be at least 1, got {p.patch_size}")
 	need(p.patch_overlap >= 0, f"patch_overlap must not be negative, got {p.patch_overlap}")
+	if isinstance(p.threshold, list):
+		need(section == "hybs", "threshold must be one number, only [hybs] takes a list")
+		need(len(p.threshold) > 0, "threshold must not be an empty list")
 	need(p.beta > 0, f"beta must be positive, got {p.beta}")
 	need(p.blur_radius >= 1, f"blur_radius must be at least 1, got {p.blur_radius}")
 	need(1 <= p.delta <= 5, f"delta must be between 1 and 5, got {p.delta}")

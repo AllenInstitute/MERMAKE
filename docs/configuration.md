@@ -33,7 +33,7 @@ Only `[paths]` is required, and only five of its keys have no default. Everythin
 
 `mermake --suggest-threshold settings.toml` deconvolves a few random images (`--sample-images`, default 3) like the pipeline does and finds the maxima once with a very low threshold. A maximum is kept at threshold `T` exactly when its `h` is above `T`, so one run gives the number of spots at every threshold. The same is done on the negated image, where all maxima are noise. The count of these relative to the bright maxima estimates the false positive fraction at each threshold. It prints a table per channel, saves `threshold_suggestion.png` in the output folder (needs matplotlib), and suggests the lowest threshold whose estimated false positive fraction is at most `--max-false-positives` (default 0.3; larger values are greedier and keep more spots).
 
-`[hybs]` has one threshold for all color channels, so choose from the per channel suggestions. The estimate is rough because deconvolution ringing is not symmetric in sign. The lowest threshold tried for the color channels is 4 robust standard deviations above the median, so a suggestion marked as the lowest tried may be too high.
+`[hybs] threshold` is either one number for all color channels or a list with one number per color channel (all channels but the last, which is dapi), for example `threshold = [18810, 9051, 8180]`. When every channel has a suggestion, `--suggest-threshold` prints that list ready to paste. `[dapi] threshold` is always one number. The estimate is rough because deconvolution ringing is not symmetric in sign. The lowest threshold tried for the color channels is 4 robust standard deviations above the median, so a suggestion marked as the lowest tried may be too high.
 
 None of them needs a GPU.
 

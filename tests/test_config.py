@@ -84,6 +84,11 @@ class TestDefaults:
 		assert cfg.hybs.beta == DEFAULTS["hybs"]["beta"]
 		assert cfg.dapi.threshold == 3.0
 
+	def test_threshold_per_channel(self):
+		cfg = load(hybs={"threshold": [18810, 9051, 4.5]})
+		assert cfg.hybs.threshold == [18810.0, 9051.0, 4.5]
+		assert all(isinstance(t, float) for t in cfg.hybs.threshold)
+
 	def test_numbers_are_coerced(self):
 		cfg = load(hybs={"sigmaZ": 2})
 		assert isinstance(cfg.hybs.sigmaZ, float) and isinstance(cfg.dapi.sigmaZ, float)
@@ -117,6 +122,11 @@ class TestValidation:
 		assert "patch_size must be an integer" in self.error(hybs={"patch_size": "big"})
 		assert "patch_size must be an integer" in self.error(hybs={"patch_size": 1.5})
 		assert "hyb_folders must be a list of strings" in self.error(paths=dict(REQUIRED, hyb_folders="exp"))
+
+	def test_threshold_list_errors(self):
+		assert "threshold must be one number" in self.error(dapi={"threshold": [1.0, 2.0]})
+		assert "must not be an empty list" in self.error(hybs={"threshold": []})
+		assert "threshold must be a number or a list of numbers" in self.error(hybs={"threshold": ["a"]})
 
 	def test_value_ranges(self):
 		assert "delta must be between 1 and 5" in self.error(hybs={"delta": 6})

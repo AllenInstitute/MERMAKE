@@ -7,6 +7,7 @@ import numpy as np
 import cupy as cp
 import dask.array as da
 
+from .config import ConfigError
 from .align import drift, drift_save
 from .deconvolver import Deconvolver
 from .io.queue import ImageQueue, Block
@@ -73,6 +74,12 @@ def process_dapi(image, queue, ctx):
 	ctx.executor.submit(queue.save_results, image, icol, stats)
 
 
+def hyb_threshold(params, icol):
+	"""The ``[hybs]`` threshold of color channel ``icol``: ``threshold`` is one number or one per channel."""
+	threshold = params.threshold
+	return threshold[icol] if isinstance(threshold, list) else threshold
+
+
 def find_hyb_maxima(chan, flat, ctx, negate=False, **overrides):
 	"""Deconvolve ``chan`` patch by patch and return the maxima kept from each patch.
 
@@ -89,6 +96,8 @@ def find_hyb_maxima(chan, flat, ctx, negate=False, **overrides):
 	    them were dropped for lying in the overlap margin.
 	"""
 	args = ctx.args
+	if "threshold" not in overrides and isinstance(args.hybs.threshold, list):
+		raise ValueError("[hybs] threshold is a list, pass the threshold of the channel")
 	params = {**vars(args.hybs), **overrides}
 	patch_overlap = args.hybs.patch_overlap
 	# there is probably a better way to do the Xh stacking
@@ -121,7 +130,8 @@ def process_hyb_channel(image, icol, queue, ctx):
 	if isinstance(data, da.Array):
 		return
 	ctx.chan.set(data)
-	Xhf, stats = find_hyb_maxima(ctx.chan, ctx.flats[icol], ctx)
+	Xhf, stats = find_hyb_maxima(ctx.chan, ctx.flats[icol], ctx,
+	                              threshold=hyb_threshold(ctx.args.hybs, icol))
 	setattr(image, f'col{icol}', Xhf)
 	ctx.executor.submit(queue.save_results, image, icol, {KIND_HYB: stats})
 
@@ -167,6 +177,10 @@ def run(args):
 		print_clean(queue.summary)
 		# set some things based on input images
 		ncol, *chan_shape = queue.shape
+		threshold = args.hybs.threshold
+		if isinstance(threshold, list) and len(threshold) != ncol - 1:
+			raise ConfigError(f"[hybs] threshold has {len(threshold)} values but the images have "
+			                  f"{ncol - 1} color channels (the last channel is dapi)")
 
 		# buffers to copy into
 		buffer = cp.empty(chan_shape, dtype=cp.float32)

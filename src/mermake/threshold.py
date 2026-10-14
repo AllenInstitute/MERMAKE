@@ -228,9 +228,13 @@ def suggest(args, n_images=3, max_fp=0.3):
 		else:
 			note = f"{a['suggested']:.4g}"
 		print(f"  channel {label}: {note}")
-	if hyb:
-		print(f"\n[hybs] takes one threshold for all color channels. The lowest suggestion, {min(hyb):.4g}, "
-		      "keeps the most spots.")
+	hyb_labels = [label for label in analyses if label != DAPI]
+	if hyb_labels and all(analyses[label]["suggested"] is not None for label in hyb_labels):
+		values = ", ".join(f"{analyses[label]['suggested']:.4g}" for label in hyb_labels)
+		print(f"\n[hybs] threshold = [{values}]  # one per color channel, or use one number for all")
+	elif hyb:
+		print(f"\n[hybs] takes one threshold for all color channels or a list with one per channel. "
+		      f"The lowest suggestion, {min(hyb):.4g}, keeps the most spots.")
 	if DAPI in analyses and analyses[DAPI]["suggested"] is not None:
 		print(f"[dapi] threshold = {analyses[DAPI]['suggested']:.4g}")
 	print("The noise estimate is rough: deconvolution ringing is not symmetric in sign.")

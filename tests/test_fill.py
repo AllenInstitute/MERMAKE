@@ -1,4 +1,7 @@
 import pytest
+
+pytest.importorskip("cupy")
+pytestmark = pytest.mark.gpu
 import cupy as cp
 
 from mermake.gpu.fill import reflect, repeat

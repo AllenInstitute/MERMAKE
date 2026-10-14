@@ -1,4 +1,7 @@
 import pytest
+
+pytest.importorskip("cupy")
+pytestmark = pytest.mark.gpu
 import numpy as np
 from unittest.mock import patch, MagicMock, mock_open
 

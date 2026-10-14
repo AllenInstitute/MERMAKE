@@ -1,4 +1,7 @@
 import pytest
+
+pytest.importorskip("cupy")
+pytestmark = pytest.mark.gpu
 import numpy as np
 
 try:

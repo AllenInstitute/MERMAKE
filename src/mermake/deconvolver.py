@@ -1,5 +1,5 @@
 import gc
-from itertools import zip_longest, chain, repeat, cycle
+from itertools import cycle
 
 import cupy as cp
 import numpy as np
@@ -38,7 +38,6 @@ def laplacian_3d(shape):
 def batch_laplacian_fft(batch_size, shape):
 	"""Compute the 3D Laplacian in frequency space and prepare for batch processing."""
 	lap = laplacian_3d(shape)  # Create a single 3D Laplacian
-	z_c, y_c, x_c = shape[0] // 2, shape[1] // 2, shape[2] // 2
 	#lap_fft = cp.fft.fftn(cp.fft.ifftshift(lap))  # Shift Laplacian to center before FFT
 	lap_fft = cp.fft.fftn(lap)
 	return lap_fft[None, ...]  # Add batch dimension without copying memory
@@ -54,7 +53,6 @@ class Deconvolver:
 			psf_stack = np.stack(list(map(self.center_psf, list(psfs.values()))))
 		else:
 			# old single psf method
-			batch_size = (channel_shape[-1] // tile_size) ** 2
 			psf_stack = self.center_psf(psfs)
 			psf_stack = self.center_psf(psfs)[None, ...]
 		psf_stack = np.pad(psf_stack, ((0, 0), (zpad, zpad), (overlap, overlap), (overlap, overlap)), mode='constant')

@@ -1,6 +1,5 @@
 import os
 import pickle
-from concurrent.futures import ThreadPoolExecutor
 
 from .gpu.fft import fftconvolve
 
@@ -162,7 +161,6 @@ def drift_save(data, filepath):
 
 def drift(block):
 	ifov = block.ifov()
-	iset = block.iset()
 	filepath = block.drift_file()
 	if not os.path.exists(filepath):
 		ref = block[len(block)//2]

@@ -1,6 +1,5 @@
 import cupy as cp
 from .gpu.runtime import kernel_source
-import time
 
 kernel_code = kernel_source("maxima.cu")
 

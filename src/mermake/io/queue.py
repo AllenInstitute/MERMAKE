@@ -89,7 +89,7 @@ class ImageQueue:
 			try:
 				first_image = read_im(path)
 				break
-			except:
+			except Exception:
 				continue
 		if first_image is None:
 			raise RuntimeError("No valid images found.")

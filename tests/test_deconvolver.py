@@ -1,7 +1,5 @@
 import pytest
 import numpy as np
-from unittest.mock import Mock, patch, MagicMock
-import gc
 
 try:
 	import cupy as cp
@@ -13,7 +11,6 @@ except ImportError:
 from mermake.io.readers import read_im
 
 from mermake.deconvolver import (
-	laplacian_3d, 
 	batch_laplacian_fft, 
 	repeat_last, 
 	Deconvolver, 

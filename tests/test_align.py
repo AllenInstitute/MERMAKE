@@ -1,11 +1,9 @@
 import pytest
-import numpy as np
 import cupy as cp
 import pickle
 import os
 import tempfile
 from unittest.mock import Mock, patch, MagicMock
-from concurrent.futures import ThreadPoolExecutor
 
 # Import the classes and functions to test
 from mermake.align import Aligner, DualAligner, drift_save, drift
@@ -256,10 +254,6 @@ class TestUtilityFunctions:
 		mock_block.fov.return_value = 1
 		mock_block.iset.return_value = 2
 		
-		kwargs = {
-			'output_folder': '/tmp',
-			'drift_save': 'drift_fov{ifov}_iset{iset}.pkl'
-		}
 		
 		with patch('os.path.exists', return_value=True):
 			result = drift(mock_block)
@@ -283,10 +277,6 @@ class TestUtilityFunctions:
 		mock_block.__iter__.return_value = iter(mock_images)
 		mock_block.__getitem__.return_value = mock_images[2]  # Middle image as reference
 		
-		kwargs = {
-			'output_folder': '/tmp',
-			'drift_save': 'drift_fov{ifov}_iset{iset}.pkl'
-		}
 		
 		with patch('os.path.exists', return_value=False):
 			with patch('mermake.align.DualAligner') as mock_dual_class:
@@ -335,7 +325,7 @@ class TestEdgeCases:
 		
 		# Should not handle empty arrays gracefully
 		with pytest.raises((ValueError)):
-			dual = DualAligner(ref, th=0.5)
+			DualAligner(ref, th=0.5)
 		#assert dual.plus is not None
 		#assert dual.minus is not None
 

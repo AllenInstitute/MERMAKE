@@ -1,6 +1,5 @@
 import pytest
 import cupy as cp
-import numpy as np
 
 from mermake.gpu.fill import reflect, repeat
 

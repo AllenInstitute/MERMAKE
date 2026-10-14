@@ -43,6 +43,6 @@ def view_napari(queue, deconvolver, args):
 	stacked = np.stack([cp.asnumpy(chan), deco, norm], axis=0)
 	viewer.add_image(stacked, name="dapi",  colormap=color[icol], blending='additive')
 	points = cp.asnumpy(Xh_plus[:, :3])
-	viewer.add_points(points, size=11, border_color=color[icol], face_color='transparent', opacity=0.6, name=f"maxima dapi")
+	viewer.add_points(points, size=11, border_color=color[icol], face_color='transparent', opacity=0.6, name="maxima dapi")
 	napari.run()
 	sys.exit()

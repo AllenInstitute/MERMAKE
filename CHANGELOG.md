@@ -4,6 +4,10 @@ All notable changes to MERMAKE. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-14
+
+The first release of the Allen Institute fork. It has breaking changes to the settings files and, for stacks with an odd number of planes, to the results; see below.
+
 ### Changed (affects results)
 
 - **Fixed a +1 voxel shift in z** for stacks with an odd number of planes. `Deconvolver` rolled the padded PSF by `-N // 2`, which is one voxel too far when the padded length `N` is odd. Reported z coordinates are now one lower than in earlier versions for such data, and the `habs` and `a` columns, which sample the raw image at the maximum, now use the right plane. x and y were not affected with the default settings.
@@ -35,6 +39,9 @@ All notable changes to MERMAKE. The format follows [Keep a Changelog](https://ke
 - Importing `mermake` no longer checks for `nvcc` and no longer needs a GPU. CuPy compiles kernels with NVRTC, so `nvcc` is not required at all.
 - Fixed out-of-bounds reads in the maxima kernels when `delta` exceeds an image dimension.
 
-## 0.0.74
+## [0.0.74]
 
-The version before the restructuring. See the git history.
+The version of [deprekate/mermake](https://github.com/deprekate/mermake) this fork started from. See the git history.
+
+[0.1.0]: https://github.com/AllenInstitute/MERMAKE/compare/9ef1138...v0.1.0
+[0.0.74]: https://github.com/deprekate/mermake

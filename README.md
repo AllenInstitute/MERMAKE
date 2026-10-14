@@ -42,6 +42,10 @@ uv run mermake settings.toml              # process; existing results are skippe
 
 To build the site: `uv run --group docs mkdocs serve`. See [CONTRIBUTING.md](CONTRIBUTING.md) to contribute.
 
+## About this fork
+
+This is the Allen Institute fork of [deprekate/mermake](https://github.com/deprekate/mermake), which it started from at version 0.0.74. It was restructured (a `src/` layout, validated settings, tests, documentation) and has diverged: the settings files and, for stacks with an odd number of planes, the z coordinates differ from upstream. See the [changelog](CHANGELOG.md).
+
 ## License
 
 GNU General Public License v3, see [LICENSE](LICENSE).

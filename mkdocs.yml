@@ -1,6 +1,6 @@
 site_name: MERMAKE
 site_description: GPU puncta detection for MERFISH and smFISH images
-repo_url: https://github.com/deprekate/mermake
+repo_url: https://github.com/AllenInstitute/MERMAKE
 edit_uri: edit/dev/docs/
 
 theme:

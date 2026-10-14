@@ -3,8 +3,8 @@
 ## Setup
 
 ```bash
-git clone https://github.com/deprekate/mermake
-cd mermake
+git clone https://github.com/AllenInstitute/MERMAKE
+cd MERMAKE
 uv sync --extra cuda12 --group docs   # runtime, CuPy, dev tools and the docs tools
 ```
 

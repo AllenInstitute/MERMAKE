@@ -9,6 +9,7 @@ description = "Code to process merfish data"
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "Katelyn McNair", email = "deprekate@gmail.com" }]
+maintainers = [{ name = "Mike Taormina" }]
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -30,7 +31,8 @@ cuda11 = ["cupy-cuda11x[ctk]"]
 viz = ["napari"]
 
 [project.urls]
-Homepage = "https://github.com/deprekate/mermake"
+Homepage = "https://github.com/AllenInstitute/MERMAKE"
+Upstream = "https://github.com/deprekate/mermake"
 
 [project.scripts]
 mermake = "mermake.cli:main"

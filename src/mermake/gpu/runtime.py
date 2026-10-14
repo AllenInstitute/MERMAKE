@@ -30,6 +30,8 @@ def check_cuda():
 
 
 def profile():
+	"""Print the shape and size of every cupy array that owns GPU memory, and the memory pool usage. For debugging.
+	"""
 	import gc
 	mempool = cp.get_default_memory_pool()
 	# Loop through all objects in the garbage collector

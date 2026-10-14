@@ -1,3 +1,4 @@
+"""In-place reflect and repeat padding along one axis of a cupy array."""
 import cupy as cp
 
 reflect_kernel = cp.RawKernel(r'''

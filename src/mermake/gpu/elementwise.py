@@ -1,3 +1,4 @@
+"""Elementwise uint16 arithmetic kernels."""
 import cupy as cp
 
 # this one clamps the output to have a min of 0 instead of rolling over
@@ -11,6 +12,10 @@ subtract_clamp_kernel = cp.ElementwiseKernel(
 )
 
 def subtract_clamp(x, y, out=None):
+    """``x - y`` for uint16 arrays, clamped at 0 instead of wrapping around.
+
+    ``out`` may be one of the inputs. Returns ``out``, or a new array if it is None.
+    """
     if out is None:
         return subtract_clamp_kernel(x, y)
     subtract_clamp_kernel(x, y, out)
@@ -27,6 +32,10 @@ subtract_reflect_kernel = cp.ElementwiseKernel(
 )
 
 def subtract_reflect(x, y, out=None):
+    """``abs(x - y)`` for uint16 arrays, instead of wrapping around below 0.
+
+    ``out`` may be one of the inputs. Returns ``out``, or a new array if it is None.
+    """
     if out is None:
         return subtract_reflect_kernel(x, y)
     subtract_reflect_kernel(x, y, out)

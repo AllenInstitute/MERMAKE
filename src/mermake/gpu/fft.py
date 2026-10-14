@@ -1,6 +1,22 @@
+"""FFT based convolution on the GPU."""
 import cupy as cp
 
 def fftconvolve(a, b, mode='full'):
+	"""N-dimensional convolution by FFT, like ``scipy.signal.fftconvolve``.
+
+	Parameters
+	----------
+	a, b : cupy.ndarray
+	    Arrays with the same number of dimensions.
+	mode : {'full', 'same', 'valid'}
+	    ``full`` returns the whole convolution, ``same`` the part with the shape of ``a`` and
+	    ``valid`` the part computed without zero padding.
+
+	Returns
+	-------
+	cupy.ndarray
+	    Real-valued result.
+	"""
 	# Compute the size for FFT in each dimension
 	shape = [sa + sb - 1 for sa, sb in zip(a.shape, b.shape)]
 

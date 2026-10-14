@@ -1,3 +1,4 @@
+"""Separable box blur for cupy arrays."""
 import cupy as cp
 from .runtime import kernel_source
 
@@ -151,6 +152,24 @@ def box_2d(image, size, axes=(-2, -1), out=None):
 	return box(image, size, axes=axes, out=out)
 
 def box_1d(image, size, axis=0, out=None):
+	"""Box blur of a float32 array along one axis.
+
+	Parameters
+	----------
+	image : cupy.ndarray
+	    float32, 2D or 3D. Must not share memory with ``out``.
+	size : int
+	    Width of the box, in pixels.
+	axis : int
+	    Axis to blur.
+	out : cupy.ndarray, optional
+	    float32 array with the shape of ``image``. Created if None.
+
+	Returns
+	-------
+	cupy.ndarray
+	    The blurred array.
+	"""
 	assert image.dtype == cp.float32, "Input must be float32"
 	if out is None:
 		out = cp.empty_like(image)

@@ -1,3 +1,4 @@
+"""MERMAKE: puncta detection for MERFISH and smFISH images, accelerated with CuPy."""
 import os
 from importlib.metadata import version, PackageNotFoundError
 

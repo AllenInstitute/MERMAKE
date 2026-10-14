@@ -1,3 +1,4 @@
+"""Parsing round, set and field-of-view information from folder and file names."""
 import os
 import re
 from collections import defaultdict
@@ -6,6 +7,10 @@ from typing import Tuple, Optional, Union
 
 
 def get_ih(file_path):
+	"""Round number: the first run of digits in the base name of ``file_path``.
+
+	Names without digits sort last, with ``10**100``.
+	"""
 	basename = os.path.basename(file_path)
 	m = re.search(r'\d+', basename)  # first contiguous digits
 	if m:
@@ -40,6 +45,22 @@ def get_iset(file_path):
 	return get_iset(path.parent)
 
 class FolderFilter:
+	"""Select round folders and fields of view from a ``first:last`` range.
+
+	Folder names are split with ``regex_pattern`` into five groups: prefix, round number, middle
+	part, set number and suffix. A folder is selected if its prefix and middle part match those
+	of the range (a middle part of ``*`` matches anything) and its round and set numbers lie
+	between those of ``first`` and ``last``.
+
+	Parameters
+	----------
+	hyb_range : str
+	    ``first:last``, each written like a round folder name, e.g. ``H1_A_set1:H16_A_set1``.
+	regex_pattern : str
+	    Regular expression with five capture groups.
+	fov_min, fov_max : float
+	    Only fields of view whose number is in this range (inclusive) are returned.
+	"""
 	def __init__(self, hyb_range: str, regex_pattern: str, fov_min: float, fov_max: float):
 		self.hyb_range = hyb_range
 		self.regex = re.compile(regex_pattern)
@@ -154,6 +175,14 @@ class FolderFilter:
 		return '\n'.join(lines)
 
 	def get_matches(self, folders):
+		"""Find the selected fields of view below ``folders``.
+
+		Returns
+		-------
+		dict
+		    ``{(iset, ifov): [path, ...]}``, where each path is a ``.zarr`` entry of a selected round
+		    folder. The list holds one path per round.
+		"""
 		matches = dict()
 		for root in folders:
 			if not os.path.exists(root):

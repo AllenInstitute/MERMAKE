@@ -1,3 +1,4 @@
+"""Prefetching queue of images, and the per-fov blocks used for drift correction."""
 import os
 from pathlib import Path
 import queue
@@ -11,7 +12,14 @@ from .naming import get_ih, get_ifov, get_iset, FolderFilter
 from ..config import namespace_to_array
 
 class Block(list):
+	"""The images of one field of view, one per round, that are drift corrected together.
+
+	``add`` refuses an image of a different field of view, which tells the pipeline that the
+	block is complete. The pixel data of earlier images is released as the block grows.
+	"""
 	def add(self, image):
+		"""Append ``image`` if it belongs to this block's field of view. Return whether it did.
+		"""
 		ifov = image.ifov
 		if not self or self.ifov() == ifov:
 			if self:
@@ -21,16 +29,43 @@ class Block(list):
 		else:
 			return False
 	def drift_file(self):
+		"""Path of the drift file of this field of view.
+		"""
 		return self[0].drift_file
 	def iset(self):
+		"""Set number of the block.
+		"""
 		return self[0].iset
 	def ifov(self):
+		"""Field of view number of the block.
+		"""
 		return self[0].ifov
 	def __repr__(self):
 		paths = [image.path for image in self]
 		return f"Block({paths})"
 	
 class ImageQueue:
+	"""Iterate over the selected images, reading them in a background thread.
+
+	Images are read ahead (``prefetch_count`` of them) as :class:`~mermake.io.readers.Container`
+	objects. Channels whose result file already exists in the output folder are not read; the
+	saved maxima are loaded instead, so an interrupted run resumes where it stopped.
+
+	Parameters
+	----------
+	args : argparse.Namespace
+	    Needs ``settings`` (a :class:`~mermake.config.Config`) and ``paths`` (its ``[paths]``
+	    section).
+	prefetch_count : int
+	    How many images to read ahead.
+
+	Attributes
+	----------
+	shape : tuple of int
+	    ``(channels, z, y, x)`` of the first image. All images are assumed to match.
+	summary : str
+	    Table of how many images were found per set and round.
+	"""
 	__version__ = __version__
 	def __init__(self, args, prefetch_count=5):
 		self.args = args
@@ -74,9 +109,13 @@ class ImageQueue:
 		self.thread.start()
 
 	def hsorted(self, files):
+		"""Sort ``files`` by the round number of their folder.
+		"""
 		return sorted(files, key=lambda f: get_ih(os.path.dirname(f)))
 
 	def containerize(self, path):
+		"""Read the image at ``path`` and attach any results already on disk. Runs in the reader thread.
+		"""
 		# everythign in this method is done async and prefetched
 
 		container = Container(path)
@@ -191,6 +230,8 @@ class ImageQueue:
 		self.thread.join()
 	'''
 	def close(self):
+		"""Stop the reader thread.
+		"""
 		self.stop_event.set()
     
 		# Drain the queue so the worker thread can finish
@@ -207,6 +248,16 @@ class ImageQueue:
 			print("Warning: worker thread did not terminate", flush=True)
 
 	def get_name(self, path, icol=None):
+		"""File name of a result, from the templates in ``[paths]``.
+
+		Parameters
+		----------
+		path : str
+		    The ``.zarr`` entry of the image.
+		icol : int, optional
+		    A color channel gives the ``hyb_save`` name, ``-1`` the ``dapi_save`` name and ``None``
+		    the ``drift_save`` name.
+		"""
 		path_obj = Path(path)
 		fov = path_obj.stem	        # the filename without extension
 		tag = path_obj.parent.name  # the parent directory name
@@ -233,6 +284,12 @@ class ImageQueue:
 		return True
 
 	def save_xfits(self, image, icol=-1, attempt=1, max_attempts=3):
+		"""Save the maxima of one channel of ``image`` to the output folder, unless the file exists.
+
+		The ``.npz`` holds ``version``, ``args`` (the settings as ``(section, key, value)`` rows)
+		and ``Xh`` for a color channel or ``Xh_plus`` and ``Xh_minus`` for the dapi channel
+		(``icol=-1``). ``attempt`` and ``max_attempts`` are unused.
+		"""
 		
 		# determine filename and data based on icol
 		if icol == -1:

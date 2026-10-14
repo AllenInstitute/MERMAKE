@@ -1,3 +1,4 @@
+"""Napari viewer used by ``mermake --check``."""
 import sys
 
 import numpy as np

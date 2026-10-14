@@ -1,3 +1,4 @@
+"""Reading images and flat fields from disk."""
 import os
 import glob
 
@@ -15,6 +16,27 @@ def center_crop(A, shape):
 	return A[top:top+h, left:left+w]
 
 def load_flats(flat_field_tag, shape=None, **kwargs):
+	"""Load the flat fields onto the GPU, one per color channel.
+
+	Every file matching ``<flat_field_tag>*`` (sorted by name) is read as the ``im`` array of an
+	``.npz``, center-cropped to the image size, box blurred over 20 x 20 pixels and divided by its
+	median, so that the result is a unit-mean illumination profile.
+
+	Parameters
+	----------
+	flat_field_tag : str
+	    Path prefix of the flat field files.
+	shape : tuple of int
+	    Shape of an image, ``(channels, z, y, x)``. Only the last two entries are used.
+	    The flat fields must be at least that large in y and x.
+	**kwargs
+	    Ignored, so ``**vars(config.paths)`` can be passed.
+
+	Returns
+	-------
+	cupy.ndarray
+	    float32 array with shape ``(n_files, y, x)``. The last entry is used for the dapi channel.
+	"""
 	stack = list()
 	files = sorted(glob.glob(flat_field_tag + '*'))
 	for file in files:
@@ -29,6 +51,14 @@ def load_flats(flat_field_tag, shape=None, **kwargs):
 	return cp.stack(stack)
 
 class Container:
+	"""An image as a list of channels, each of which is a dask array until it is computed.
+
+	``Container(path)`` reads a field of view lazily with :func:`read_im` and splits the first
+	axis into one sub-container per channel; ``container[icol].data`` is the channel array.
+	Containers compare and hash by path. Results are attached as attributes while the image is
+	processed: ``col0``, ``col1``, ... (hyb maxima), ``Xh_plus`` and ``Xh_minus`` (dapi maxima),
+	and the drift information.
+	"""
 	def __init__(self, path_or_array):
 		if isinstance(path_or_array, str):
 			# Load from file
@@ -89,6 +119,28 @@ class Container:
 
 
 def read_im(path, return_pos=False):
+	"""Open a field of view as a lazy dask array.
+
+	``path`` is the ``<name>_<fov>.zarr`` entry of a round folder. The data itself is the zarr
+	array ``<round folder>/<fov>/data``. The first plane is dropped. If ``<name>_<fov>.xml``
+	exists, the remaining planes are reshaped to ``(channels, z, y, x)`` using the number of
+	channels, which is the last number of the ``z_offsets`` field (the dapi channel comes last).
+	8-bit images are squared and returned as uint16.
+
+	Parameters
+	----------
+	path : str
+	    Path of the ``.zarr`` entry.
+	return_pos : bool
+	    Also return the stage position from the XML file.
+
+	Returns
+	-------
+	dask.array.Array
+	    Image with shape ``(channels, z, y, x)``, or ``(planes, y, x)`` without an XML file.
+	x, y : float
+	    Stage position, only when ``return_pos`` is true.
+	"""
 	dirname = os.path.dirname(path)
 	fov = os.path.basename(path).split('_')[-1].split('.')[0]
 	file_ = os.path.join(dirname, fov, 'data')

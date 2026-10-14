@@ -1,3 +1,4 @@
+"""Drift correction between hybridization rounds by aligning dapi maxima."""
 import os
 import pickle
 
@@ -9,6 +10,24 @@ from cupyx.scipy.spatial import KDTree
 #from scipy.spatial import KDTree
 
 class Aligner:
+	"""Find the translation between two sets of 3D points.
+
+	The reference points are binned on a grid ``resc`` times coarser than the voxels and the
+	translation is found by FFT cross-correlation of the two binned images. It is then refined
+	by iterating nearest neighbor matches with a shrinking distance cutoff.
+
+	Parameters
+	----------
+	X_ref : cupy.ndarray
+	    Reference points, rows of ``(z, x, y, ...)`` in voxels. Only the first three columns
+	    are used for matching.
+	resc : float
+	    Bin size of the coarse alignment, in voxels, and the starting match distance.
+	trim : int
+	    Points this many bins from the xy edge of the point cloud are ignored in the coarse step.
+	th : float, optional
+	    If given, only points whose last column (the intensity ``h``) exceeds it are used.
+	"""
 	def __init__(self, X_ref, resc=5, trim=10, th=None):
 		self.xp = cp.get_array_module(X_ref)
 		self.resc = resc
@@ -34,6 +53,15 @@ class Aligner:
 		self.im_ref, self.Xm_ref = self.get_im_from_Xh(self.X_ref)
 
 	def get_im_from_Xh(self, Xh):
+		"""Bin points into a binary image on the coarse grid.
+
+		Returns
+		-------
+		image : cupy.ndarray
+		    float32 image that is 1 in every bin that holds a point.
+		offset : cupy.ndarray
+		    Integer offset of the image origin in bins (always zero here).
+		"""
 		# it would help to be able to use a preallocated buffer here so
 		# that the imf array isnt created in ram every time, which is slow
 		#  ie  get_im_from_Xh(self, Xh, out=buffer)
@@ -58,6 +86,18 @@ class Aligner:
 		return imf, Xm
 
 	def get_Xtzxy(self, X, tzxy0, target=3):
+		"""Refine a translation by matching each point to its nearest reference point.
+
+		The match distance shrinks from ``resc`` to ``target`` voxels over five iterations, and the
+		translation is updated each time to the mean offset of the matched pairs.
+
+		Returns
+		-------
+		tzxy : cupy.ndarray
+		    Refined ``(z, x, y)`` translation of ``X`` relative to the reference, in voxels.
+		n_points : int
+		    Number of points matched in the last iteration.
+		"""
 		xp = self.xp
 		tzxy = tzxy0
 		Npts = 0
@@ -91,6 +131,24 @@ class Aligner:
 		return tuple(slices_bk) , tuple(slices_sig)
 
 	def get_best_translation_points(self, X, target=3, return_counts=False):
+		"""Translation of the points ``X`` relative to the reference points.
+
+		Parameters
+		----------
+		X : cupy.ndarray
+		    Points, rows of ``(z, x, y, ...)`` in voxels.
+		target : float
+		    Final match distance of the refinement, in voxels.
+		return_counts : bool
+		    Also return the number of matched points.
+
+		Returns
+		-------
+		tzxy : cupy.ndarray
+		    ``(z, x, y)`` shift in voxels, such that ``X - tzxy`` lines up with the reference.
+		n_points : int
+		    Only if ``return_counts``.
+		"""
 		xp = self.xp
 	
 		# do thresholding of the maximas
@@ -118,6 +176,8 @@ class Aligner:
 
 
 	def threshold(self, X):
+		"""Keep the points whose last column exceeds ``th``. Returns an empty ``(0, dim)`` array if none do.
+		"""
 		xp = cp.get_array_module(X)
 		th = self.th
 		dim = X.shape[1]
@@ -128,6 +188,15 @@ class Aligner:
 		return xp.zeros([0,dim])
 
 class DualAligner:
+	"""Align using both the positive and the negative dapi maxima of a reference image.
+
+	Parameters
+	----------
+	ref : object
+	    Image with the attributes ``Xh_plus`` and ``Xh_minus``.
+	th : float, optional
+	    Intensity threshold passed to the two :class:`Aligner` objects.
+	"""
 	def __init__(self, ref, th=None):
 		self.xp = cp.get_array_module(ref)
 		self.plus = Aligner(ref.Xh_plus[:,:3], th = th)
@@ -135,6 +204,26 @@ class DualAligner:
 		self.th = th
 	
 	def get_best_translation_pointsV2(self, obj):
+		"""Drift of ``obj`` relative to the reference image.
+
+		The plus and minus alignments are averaged, weighted by their number of matched points, if
+		they agree to within 2 voxels. Otherwise the one with more matches is used.
+
+		Parameters
+		----------
+		obj : object
+		    Image with the attributes ``Xh_plus`` and ``Xh_minus``.
+
+		Returns
+		-------
+		tzxyf : cupy.ndarray
+		    Final drift ``(z, x, y)`` in voxels, with the sign that corrects ``obj`` (the negative of
+		    the translation).
+		tzxy_plus, tzxy_minus : cupy.ndarray
+		    The translations found with the positive and negative maxima.
+		N_plus, N_minus : int
+		    Number of matched points in each.
+		"""
 		xp = self.xp
 
 		Xh_plus = obj.Xh_plus
@@ -155,11 +244,30 @@ class DualAligner:
 		return tzxyf, tzxy_plus, tzxy_minus, N_plus, N_minus
 
 def drift_save(data, filepath):
+	"""Pickle ``data`` to ``filepath``.
+	"""
 	# maybe put this inside io.py for consistency
 	with open(filepath, 'wb') as f:
 		pickle.dump(data, f)
 
 def drift(block):
+	"""Compute the drift of every image of a field of view relative to its middle round.
+
+	Nothing is computed if the drift file of the block exists.
+
+	Parameters
+	----------
+	block : mermake.io.queue.Block
+	    The images of one field of view, with ``Xh_plus`` and ``Xh_minus`` set.
+
+	Returns
+	-------
+	list, str or None
+	    ``([drifts, files, ifov, ref_path], filepath)``, ready for :func:`drift_save`, or ``None``
+	    if the drift file already exists. ``drifts`` holds one
+	    ``(tzxyf, tzxy_plus, tzxy_minus, N_plus, N_minus)`` tuple per image and ``files`` the
+	    round folder of each.
+	"""
 	ifov = block.ifov()
 	filepath = block.drift_file()
 	if not os.path.exists(filepath):

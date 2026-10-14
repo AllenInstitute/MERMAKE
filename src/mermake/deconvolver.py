@@ -1,3 +1,4 @@
+"""Patch-wise FFT deconvolution on the GPU."""
 import gc
 from itertools import cycle
 
@@ -8,6 +9,8 @@ from .gpu import blur
 from .gpu.fill import reflect
 
 def repeat_last(iterable):
+	"""Yield the items of ``iterable``, then keep yielding the last one forever. Yields nothing if it is empty.
+	"""
 	it = iter(iterable)
 	try:
 		last = next(it)  # Get the first element
@@ -225,6 +228,27 @@ class Deconvolver:
 			yield x,y,patch_res[:,:xend, :yend],patch_pad[zpad:-zpad, :xend, :yend]
 
 	def apply(self, image, flat_field=None, blur_radius=None, output=None, **kwargs):
+		"""Deconvolve the whole image and stitch the patches back together.
+
+		Only the central ``patch_size`` square of each patch is used, so the overlap margins never
+		end up in the output.
+
+		Parameters
+		----------
+		image : cupy.ndarray
+		    ``(z, y, x)`` image. Should be larger than ``patch_size`` in y and x.
+		flat_field : cupy.ndarray, optional
+		    Flat field to divide by.
+		blur_radius : int, optional
+		    Width in pixels of the xy box blur subtracted from each patch.
+		output : cupy.ndarray, optional
+		    float32 array with the shape of ``image`` to write into. Created if None.
+
+		Returns
+		-------
+		cupy.ndarray
+		    float32 deconvolved image.
+		"""
 		xp = cp.get_array_module(image)
 		if output is None:
 			output = xp.empty_like(image, dtype=xp.float32)
@@ -325,6 +349,25 @@ class Deconvolver:
 		return psff
 
 def full_deconv(image, psfs, flat_field = None, patch_size=300, zpad = None, patch_overlap = 1, beta = 0.001):
+	"""Deconvolve one image with a new :class:`Deconvolver` and free its GPU memory afterwards.
+
+	Parameters
+	----------
+	image : cupy.ndarray
+	    ``(z, y, x)`` image.
+	psfs : numpy.ndarray or dict
+	    PSF, see :class:`Deconvolver`.
+	flat_field : cupy.ndarray, optional
+	    Flat field to divide by.
+	patch_size, patch_overlap, beta : see :class:`Deconvolver`
+	zpad : int, optional
+	    Default: the depth of the image.
+
+	Returns
+	-------
+	cupy.ndarray
+	    float32 deconvolved image with the shape of ``image``.
+	"""
 	xp = cp.get_array_module(image)
 
 	shape = image.shape

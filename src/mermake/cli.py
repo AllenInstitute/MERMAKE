@@ -23,6 +23,8 @@ def is_valid_file(path):
 
 
 class CustomArgumentParser(argparse.ArgumentParser):
+	"""An argument parser that prints a minimal example settings file when no settings file is given.
+	"""
 	def error(self, message):
 		# Customizing the error message
 		if "the following arguments are required: settings" in message:

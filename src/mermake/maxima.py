@@ -1,3 +1,4 @@
+"""Local maxima detection and sub-voxel refinement (GPU)."""
 import cupy as cp
 from .gpu.runtime import kernel_source
 

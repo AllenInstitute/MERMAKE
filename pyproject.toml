@@ -2,3 +2,57 @@
 requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "mermake"
+dynamic = ["version"]
+description = "Code to process merfish data"
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Katelyn McNair", email = "deprekate@gmail.com" }]
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "numpy",
+    "dask",
+    "zarr",
+    "scipy",
+    "scikit-learn",
+    'tomli; python_version < "3.11"',
+]
+
+[project.optional-dependencies]
+cuda12 = ["cupy-cuda12x[ctk]"]
+cuda11 = ["cupy-cuda11x[ctk]"]
+viz = ["napari"]
+
+[project.urls]
+Homepage = "https://github.com/deprekate/mermake"
+
+[project.scripts]
+mermake = "mermake.__main__:main"
+
+[dependency-groups]
+dev = ["pytest", "ruff"]
+docs = ["mkdocs-material", "mkdocstrings[python]"]
+
+[tool.uv]
+conflicts = [[{ extra = "cuda11" }, { extra = "cuda12" }]]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["mermake*"]
+
+[tool.setuptools.package-data]
+mermake = ["*.cu"]
+
+[tool.setuptools.dynamic]
+version = { file = ["VERSION"] }
+
+[tool.ruff]
+line-length = 100

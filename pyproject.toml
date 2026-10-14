@@ -33,7 +33,7 @@ viz = ["napari"]
 Homepage = "https://github.com/deprekate/mermake"
 
 [project.scripts]
-mermake = "mermake.__main__:main"
+mermake = "mermake.cli:main"
 
 [dependency-groups]
 dev = ["pytest", "ruff"]

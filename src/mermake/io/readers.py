@@ -67,10 +67,10 @@ class Container:
 	processed: ``col0``, ``col1``, ... (hyb maxima), ``Xh_plus`` and ``Xh_minus`` (dapi maxima),
 	and the drift information.
 	"""
-	def __init__(self, path_or_array):
+	def __init__(self, path_or_array, sum_channels=None):
 		if isinstance(path_or_array, str):
 			# Load from file
-			im = read_im(path_or_array)
+			im = read_im(path_or_array, sum_channels=sum_channels)
 			# Always split first axis into channels
 			self.data = [Container(im[i]) for i in range(im.shape[0])]
 			self.path = path_or_array
@@ -138,7 +138,38 @@ def array_path(path):
 	fov = os.path.basename(path).split('_')[-1].split('.')[0]
 	return os.path.join(os.path.dirname(path), fov, 'data')
 
-def read_im(path, return_pos=False):
+def sum_channel_pair(image, pair):
+	"""Replace two channels of ``image`` by their sum.
+
+	The sum is stored at the lower of the two indices and the other channel is removed, so the
+	order of the remaining channels is kept. uint16 data is added in 32 bits and clipped at
+	65535, because a plain uint16 sum would wrap around.
+
+	Parameters
+	----------
+	image : dask.array.Array
+	    Image with shape ``(channels, z, y, x)``.
+	pair : sequence of int
+	    The two channel indices.
+
+	Returns
+	-------
+	dask.array.Array
+	    Image with shape ``(channels - 1, z, y, x)``.
+	"""
+	if image.ndim != 4:
+		raise ValueError(f"sum_channels needs an image with shape (channels, z, y, x), got {image.shape}")
+	i, j = sorted(pair)
+	if not 0 <= i < j < image.shape[0]:
+		raise ValueError(f"sum_channels {list(pair)} must be two different indices below the "
+		                 f"number of channels, {image.shape[0]}")
+	if image.dtype == np.uint16:
+		total = da.minimum(image[i].astype(np.uint32) + image[j].astype(np.uint32), 65535).astype(np.uint16)
+	else:
+		total = image[i] + image[j]
+	return da.concatenate([image[:i], total[None], image[i + 1:j], image[j + 1:]])
+
+def read_im(path, return_pos=False, sum_channels=None):
 	"""Open a field of view as a lazy dask array.
 
 	``path`` is the ``<name>_<fov>.zarr`` entry of a round folder. The data itself is the zarr
@@ -154,6 +185,10 @@ def read_im(path, return_pos=False):
 	    Path of the ``.zarr`` entry.
 	return_pos : bool
 	    Also return the stage position from the XML file.
+	sum_channels : sequence of int, optional
+	    Two channel indices to sum into one channel, see :func:`sum_channel_pair`. This is done
+	    after the 8-bit squaring, so each exposure is converted to linear intensity before they
+	    are added. Needs the XML file.
 
 	Returns
 	-------
@@ -186,6 +221,9 @@ def read_im(path, return_pos=False):
 
 	if image.dtype == np.uint8:
 		image = image.astype(np.uint16) ** 2
+
+	if sum_channels is not None:
+		image = sum_channel_pair(image, sum_channels)
 
 	if return_pos:
 		return image, x, y

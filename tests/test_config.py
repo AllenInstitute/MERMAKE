@@ -141,6 +141,14 @@ class TestValidation:
 		assert "regex" in self.error(paths=dict(REQUIRED, regex="(("))
 		assert "5 capture groups" in self.error(paths=dict(REQUIRED, regex="(a)"))
 
+	def test_sum_channels(self):
+		assert load().paths.sum_channels is None
+		assert load(paths=dict(REQUIRED, sum_channels=[0, 1])).paths.sum_channels == [0, 1]
+		assert "sum_channels must be a list of integers" in self.error(paths=dict(REQUIRED, sum_channels="01"))
+		assert "sum_channels must be a list of integers" in self.error(paths=dict(REQUIRED, sum_channels=[0, "a"]))
+		for bad in ([0], [0, 1, 2], [1, 1], [-1, 1]):
+			assert "sum_channels must be two different" in self.error(paths=dict(REQUIRED, sum_channels=bad))
+
 	def test_all_errors_reported_together(self):
 		msg = self.error(hybs={"threshhold": 5}, dapi={"beta": -1, "delta": 9})
 		assert msg.count("\n") == 2

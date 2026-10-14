@@ -18,6 +18,8 @@ hyb_range = 'H1_BICAN_set1:H16_BICAN_set1'
 output_folder = 'MERFISH_Analysis_MERMAKE'
 # Optional: only process these fields of view (inclusive)
 fov_range = '0:1'
+# Optional: sum two channels that are two exposures of the same color
+#sum_channels = [0, 1]
 
 # Example overrides, uncomment to change:
 #[hybs]

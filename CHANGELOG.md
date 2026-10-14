@@ -13,6 +13,7 @@ All notable changes to MERMAKE. The format follows [Keep a Changelog](https://ke
 - `pyarrow` is now a dependency.
 - Flat fields can be `.npy` 2D arrays as well as `.npz` files with the array `im`.
 - Images are read from the `.zarr` entry itself when that is a zarr array, which is how current acquisition software writes them. The older `<fov>/data` layout is still read.
+- `[paths] sum_channels = [i, j]` sums two channels into one when an image is read, for acquisitions where one color was imaged twice to double its exposure. 8-bit data is squared before the sum, and the sum is clipped at 65535.
 
 ### Changed
 

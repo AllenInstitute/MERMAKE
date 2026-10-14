@@ -90,7 +90,7 @@ class ImageQueue:
 		first_image = None
 		for path in chain.from_iterable(matches.values()):
 			try:
-				first_image = read_im(path)
+				first_image = read_im(path, sum_channels=self.sum_channels)
 				break
 			except Exception:
 				continue
@@ -121,7 +121,7 @@ class ImageQueue:
 		"""
 		# everythign in this method is done async and prefetched
 
-		container = Container(path)
+		container = Container(path, sum_channels=self.sum_channels)
 
 		# check if the fov has been fitted
 		# we should test whether the load worked!!!!!!!!!!

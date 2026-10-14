@@ -1,13 +1,14 @@
-"""Tests for reading images and flat fields."""
+"""Tests for reading images and flat fields, and for summing channels."""
+import dask.array as da
 import numpy as np
 import pytest
 import zarr
 
 pytest.importorskip("cupy")  # mermake.io.readers imports cupy
 
-from mermake.io.readers import array_path, load_flats, read_im
+from mermake.io.readers import Container, array_path, load_flats, read_im, sum_channel_pair
 
-NCH, NZ, NY, NX = 3, 4, 8, 8
+NCH, NZ, NY, NX = 5, 4, 8, 8
 XML = ('<root><z_offsets type="string">0:-15:-0.4:{n}</z_offsets>'
        '<stage_position type="custom">1.0,2.0</stage_position></root>')
 
@@ -77,3 +78,52 @@ class TestFlats:
 		expected = load_flats(str(only_npz / "flat_"), shape=shape).get()
 		assert mixed.shape == (2, NY, NX)
 		np.testing.assert_allclose(mixed, expected)
+
+
+class TestSumChannels:
+	@pytest.mark.parametrize("legacy", [False, True])
+	def test_default_does_not_sum(self, tmp_path, legacy):
+		path = write_fov(tmp_path, make_stack(), legacy)
+		assert read_im(path).shape[0] == NCH
+		assert len(Container(path).data) == NCH
+
+	@pytest.mark.parametrize("pair", [(0, 1), (3, 4), (1, 3), (4, 1)])
+	def test_sum_of_squares(self, tmp_path, pair):
+		stack = make_stack()
+		squared = stack.astype(np.uint32) ** 2
+		image = read_im(write_fov(tmp_path, stack, legacy=False), sum_channels=pair).compute()
+		lo, hi = sorted(pair)
+		assert image.shape == (NCH - 1, NZ, NY, NX)
+		assert image.dtype == np.uint16
+		np.testing.assert_array_equal(image[lo], squared[lo] + squared[hi])
+		kept = [i for i in range(NCH) if i != hi]
+		for new, old in enumerate(kept):
+			if old != lo:
+				np.testing.assert_array_equal(image[new], squared[old])
+
+	def test_container_channels(self, tmp_path):
+		path = write_fov(tmp_path, make_stack(), legacy=False)
+		container = Container(path, sum_channels=[0, 1])
+		assert len(container.data) == NCH - 1
+
+	def test_saturation_clips(self, tmp_path):
+		stack = np.full((NCH, NZ, NY, NX), 255, dtype=np.uint8)
+		image = read_im(write_fov(tmp_path, stack, legacy=False), sum_channels=[0, 1]).compute()
+		assert (image[0] == 65535).all()
+		assert (image[1] == 255 ** 2).all()
+
+	def test_uint16_does_not_wrap(self):
+		stack = da.from_array(np.full((3, 1, 2, 2), 50000, dtype=np.uint16))
+		out = sum_channel_pair(stack, [0, 2]).compute()
+		assert out.shape == (2, 1, 2, 2)
+		assert (out[0] == 65535).all() and (out[1] == 50000).all()
+
+	@pytest.mark.parametrize("pair", [(0, 0), (0, 5), (-1, 1), (2, 7)])
+	def test_bad_pair(self, tmp_path, pair):
+		path = write_fov(tmp_path, make_stack(), legacy=False)
+		with pytest.raises(ValueError, match="sum_channels"):
+			read_im(path, sum_channels=pair)
+
+	def test_needs_channels(self):
+		with pytest.raises(ValueError, match="sum_channels"):
+			sum_channel_pair(da.zeros((10, 4, 4), dtype=np.uint16), [0, 1])

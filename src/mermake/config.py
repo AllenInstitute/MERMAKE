@@ -63,6 +63,12 @@ class Paths:
 	fov_range: Optional[str] = _f(
 		"Only process fields of view with index in `min:max` (inclusive), e.g. `0:10`. "
 		"Default: all.", default=None)
+	sum_channels: Optional[List[int]] = _f(
+		"Advanced. Two channel indices (0-based, in the order the channels are stored, before any "
+		"are merged) whose images are summed into one channel when an image is read. For "
+		"acquisitions where one color was imaged twice to double its exposure. The sum is "
+		"stored at the lower index and the image has one channel fewer, so the flat fields must "
+		"match the merged count. Default: none.", default=None)
 	hyb_save: str = _f(
 		"Advanced. Filename template for the maxima of each color channel. Placeholders: "
 		"{fov} (zarr name), {tag} (round folder name), {icol} (color channel index).",
@@ -403,6 +409,10 @@ def _check_paths(p, base_dir, check_files, errors):
 			if end is None:
 				errors.append(f"[paths] hyb_range {p.hyb_range!r} does not match regex {p.regex!r}")
 				break
+	if p.sum_channels is not None:
+		if len(p.sum_channels) != 2 or p.sum_channels[0] == p.sum_channels[1] or min(p.sum_channels) < 0:
+			errors.append(f"[paths] sum_channels must be two different channel indices, "
+			              f"0 or more, got {p.sum_channels!r}")
 	if p.fov_range is not None:
 		try:
 			low, high = map(float, p.fov_range.split(":"))

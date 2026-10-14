@@ -21,6 +21,8 @@
 
 The first plane of the array is dropped. The remaining planes are ordered z-major with the color channels interleaved. `Conv_zscan__020.xml` gives the number of channels, as the last number of its `z_offsets` field (`0:-15:-0.4:3` means 3 channels), and the stage position (`stage_position`). The image is reshaped to `(channels, z, y, x)`. The **last channel is the dapi channel**, the others are the hyb colors. 8-bit data is squared and converted to uint16.
 
+If one color was imaged twice to double its exposure, set `[paths] sum_channels = [i, j]` to the indices of the two channels (counted in the stored order, before merging). They are replaced by their sum, at index `i`, so the image has one channel fewer and everything downstream, including the number of flat fields, uses the merged count. For 8-bit data each exposure is squared first and the sum is clipped at 65535.
+
 All images are assumed to have the shape of the first one.
 
 ### PSF

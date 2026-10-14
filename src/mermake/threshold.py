@@ -124,7 +124,7 @@ def sample(args, n_images=3, seed=0, floor_sigmas=4.0, dapi_floor=1.5, log=print
 		raise RuntimeError("No images found.")
 	chosen = random.Random(seed).sample(files, min(n_images, len(files)))
 
-	ncol, *chan_shape = read_im(chosen[0]).shape
+	ncol, *chan_shape = read_im(chosen[0], sum_channels=paths.sum_channels).shape
 	psfs = np.load(paths.psf_file, allow_pickle=True)
 	flats = load_flats(shape=(ncol, *chan_shape), **vars(paths))
 	buffer = cp.empty(chan_shape, dtype=cp.float32)
@@ -134,7 +134,7 @@ def sample(args, n_images=3, seed=0, floor_sigmas=4.0, dapi_floor=1.5, log=print
 	found = {icol: dict(pos=[], neg=[], floor=None) for icol in (*range(ncol - 1), DAPI)}
 	for path in chosen:
 		log(f"sampling {path}")
-		container = Container(path)
+		container = Container(path, sum_channels=paths.sum_channels)
 		for icol in range(ncol - 1):
 			container[icol].compute()
 			chan.set(container[icol].data)

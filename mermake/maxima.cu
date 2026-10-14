@@ -51,6 +51,9 @@ void local_maxima_count(const float* image, float threshold, int delta,
 					ny = (ny < 0) ? -ny : 2 * width - ny - 2;
 				}
 
+				// Single reflection can still be out of range when delta exceeds the image size
+				if (nz < 0 || nz >= depth || nx < 0 || nx >= height || ny < 0 || ny >= width) continue;
+
 				if (image[idx] < image[nz * height * width + nx * width + ny]) {
 					is_max = false;
 					break;
@@ -122,6 +125,9 @@ void local_maxima(const float* image, float threshold, int delta, int delta_fit,
 				if (ny < 0 || ny >= width) {
 					ny = (ny < 0) ? -ny : 2 * width - ny - 2;
 				}
+
+				// Single reflection can still be out of range when delta exceeds the image size
+				if (nz < 0 || nz >= depth || nx < 0 || nx >= height || ny < 0 || ny >= width) continue;
 
 				if (image[idx] < image[nz * height * width + nx * width + ny]) {
 					is_max = false;

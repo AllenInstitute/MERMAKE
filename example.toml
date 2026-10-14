@@ -7,7 +7,6 @@ hyb_range = 'H1_BICAN_set1:H16_BICAN_set1'
 hyb_folders = ['Tominersen_Human_05_09_2025']
 output_folder = 'MERFISH_Analysis_MERMAKE'
 fov_range = '0:1'
-#background_range = 'H0_background_set1:H0_background_set1'
 #---------------------------------------------------------------------------------------#
 #---------------------------------------------------------------------------------------#
 #           you probably dont have to change any of the settings below                  #

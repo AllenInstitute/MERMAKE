@@ -7,10 +7,9 @@ import numpy as np
 import cupy as cp
 import dask.array as da
 
-from .align import Aligner, drift, drift_save
+from .align import drift, drift_save
 from .config import dict_to_namespace
 from .deconvolver import Deconvolver
-from .gpu import elementwise
 from .io.queue import ImageQueue, Block
 from .io.readers import load_flats
 from .maxima import find_local_maxima
@@ -72,7 +71,7 @@ def process_dapi(image, queue, ctx):
 	ctx.executor.submit(queue.save_xfits, image, icol)
 
 
-def find_hyb_maxima(chan, flat, slices_chan, ctx):
+def find_hyb_maxima(chan, flat, ctx):
 	"""Deconvolve ``chan`` tile by tile and return the maxima kept from each tile.
 
 	Returns a ``(n, 8)`` float32 cupy array in full-image coordinates.
@@ -81,7 +80,7 @@ def find_hyb_maxima(chan, flat, slices_chan, ctx):
 	overlap = args.hybs.overlap
 	# there is probably a better way to do the Xh stacking
 	Xhf = []
-	for x, y, tile, raw in ctx.deconvolver.hybs.tile_wise(chan[slices_chan], flat[slices_chan[1:]], **vars(args.hybs)):
+	for x, y, tile, raw in ctx.deconvolver.hybs.tile_wise(chan, flat, **vars(args.hybs)):
 		Xh = find_local_maxima(tile, raw=raw, **vars(args.hybs))
 		keep = cp.all((Xh[:,1:3] >= overlap) & (Xh[:,1:3] < cp.array([tile.shape[1] - overlap, tile.shape[2] - overlap])), axis=-1)
 		if cp.any(keep):
@@ -94,23 +93,13 @@ def find_hyb_maxima(chan, flat, slices_chan, ctx):
 	return cp.zeros([0,8], dtype=cp.float32)
 
 
-def process_hyb_channel(image, icol, queue, aligner, slices_chan, ctx):
+def process_hyb_channel(image, icol, queue, ctx):
 	"""Process one color channel of ``image`` and save its maxima."""
 	data = image[icol].data
 	if isinstance(data, da.Array):
 		return
-	chan, block = ctx.chan, ctx.block
-	chan.set(data)
-	flat = ctx.flats[icol]
-
-	if aligner:
-		# this reflects the subtract so there is no roll over due to datatypes
-		slices_back = ctx.slices_back
-		elementwise.subtract_reflect(chan[slices_chan], block.back[icol][slices_back], out=chan[slices_chan])
-
-	Xhf = find_hyb_maxima(chan, flat, slices_chan, ctx)
-	if aligner:
-		Xhf[:,:3] += cp.asarray([s.start for s in slices_chan])
+	ctx.chan.set(data)
+	Xhf = find_hyb_maxima(ctx.chan, ctx.flats[icol], ctx)
 	setattr(image, f'col{icol}', Xhf)
 	ctx.executor.submit(queue.save_xfits, image, icol)
 
@@ -136,18 +125,8 @@ def process_image(image, queue, ctx):
 	print('running on:', image.path, flush=True)
 	process_dapi(image, queue, ctx)
 
-	slices_chan = tuple([slice(0, None)] * 3)
-	# this is for background subtraction
-	aligner = None
-	if image in queue.background_files:
-		aligner = Aligner(image.Xh_plus)
-		ctx.block.back = [cp.asarray(image[icol].data) for icol in range(ctx.ncol - 1)]
-		return
-	elif aligner:
-		ctx.slices_back, slices_chan = aligner.get_shifted_slices(image.Xh_plus[:,:3], ctx.chan.shape)
-
 	for icol in range(ctx.ncol - 1):
-		process_hyb_channel(image, icol, queue, aligner, slices_chan, ctx)
+		process_hyb_channel(image, icol, queue, ctx)
 	# this block of images for a fov is over
 	finish_block(image, ctx)
 
@@ -184,7 +163,6 @@ def run(args):
 		ctx = SimpleNamespace(
 			args=args, ncol=ncol, buffer=buffer, chan=chan, flats=flats,
 			deconvolver=deconvolver, executor=executor, block=Block(),
-			slices_back=None,
 		)
 
 		print_clean('Starting image processing.\n')

@@ -12,8 +12,6 @@ from .naming import get_ih, get_ifov, get_iset, FolderFilter
 from ..config import namespace_to_array
 
 class Block(list):
-	def __init__(self, items=None):
-		self.background = None
 	def add(self, image):
 		ifov = image.ifov
 		if not self or self.ifov() == ifov:
@@ -46,12 +44,6 @@ class ImageQueue:
 		if hasattr(self, "fov_range"):
 			fov_min, fov_max = map(float, self.fov_range.split(':'))
 		
-		self.background_files = set()
-		background = None
-		if hasattr(self, "background_range"):
-			filtered = FolderFilter(self.background_range, self.regex, fov_min, fov_max)
-			background = filtered.get_matches(self.hyb_folders)
-			self.background_files = set(chain.from_iterable(background.values()))
 		filtered = FolderFilter(self.hyb_range, self.regex, fov_min, fov_max)
 		matches = filtered.get_matches(self.hyb_folders)
 
@@ -96,17 +88,11 @@ class ImageQueue:
 		self.shape = first_image.shape
 		self.dtype = first_image.dtype
 	
-		# interlace the background with the regular images
-		shared = set(matches.keys()).intersection(background.keys()) if background else matches.keys()
+		ordered = []
+		for key in matches:
+			ordered.extend(self.hsorted(matches[key]))
 
-		interlaced = []
-		for key in shared:
-			if background and key in background:
-				interlaced.extend(background[key])  # put background first
-			hsorted = self.hsorted(matches[key])
-			interlaced.extend(hsorted)				# then all matches for that iset,ifov
-
-		self.files = iter(interlaced)
+		self.files = iter(ordered)
 
 		# Start worker thread(s)
 		self.queue = queue.Queue(maxsize=prefetch_count)
@@ -127,8 +113,8 @@ class ImageQueue:
 		for icol in range(self.shape[0] - 1):
 			filename = self.get_name(path, icol)
 			filepath = os.path.join(self.output_folder, filename)
-			# only compute if the image has not been processed or if it is background
-			if not os.path.exists(filepath) or container in self.background_files:
+			# only compute if the image has not been processed
+			if not os.path.exists(filepath):
 				container[icol].compute()
 			else:
 				Xh = cp.load(filepath)['Xh']

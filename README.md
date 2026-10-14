@@ -68,7 +68,6 @@ flat_field_tag = "flat_field/Scope3_"
 hyb_range = "H1_*_set1:H16_*_set3"
 hyb_folders = ["experiment_folder"]
 output_folder = "output"
-background_range = 'H0_background_set1:H0_background_set3'
 #---------------------------------------------------------------------------------------#
 #---------------------------------------------------------------------------------------#
 #           you probably dont have to change any of the settings below                  #
@@ -128,7 +127,7 @@ Source layout (`src/mermake/`):
 | Module | Contents |
 |--------|----------|
 | `cli.py`, `__main__.py` | argument parsing, settings loading, `mermake` entry point |
-| `pipeline.py` | the processing loop: dapi, per-channel maxima, background, drift, save |
+| `pipeline.py` | the processing loop: dapi, per-channel maxima, drift, save |
 | `io/` | `readers` (zarr/flat fields), `naming` (filename parsing, `FolderFilter`), `queue` (`ImageQueue`, `Block`), `metadata` (XML) |
 | `gpu/` | CuPy kernels and helpers: `blur`, `fill`, `elementwise`, `fft`, `runtime`, and the `.cu` sources in `kernels/` |
 | `deconvolver.py`, `maxima.py`, `align.py` | deconvolution, local-maxima detection, drift and alignment |
@@ -140,11 +139,10 @@ Bugs and rough edges found during the package restructuring. Entries are kept un
 
 | # | Area | Issue | Status |
 |---|------|-------|--------|
-| 1 | Background subtraction | `background_range` has no effect on the output. In `pipeline.process_image` the `aligner` is reset to `None` for every image, and background images end in an early return, so the `elif aligner:` branch (which computes the shifted slices and runs `subtract_reflect`) can never run. The pre-refactor code behaved the same. | Open. Fixing it changes output, so decide the intended behavior first. |
 | 2 | Test fixtures | `tests/examples/single/out/*.npz` do not match the output of the current code (nor of the code before the restructuring), so they are from an older version and cannot be used as a regression reference. | Open. Regenerate them or replace them with a small fixture. |
 | 3 | Test data size | `tests/examples/` is about 287 MB tracked in git. | Open. Plan: a small fixture in git, the full data as a Code Ocean data asset. |
 | 4 | Tests | `test_with_mocked_blur` in `tests/test_deconvolver.py` is never collected, so it does not run. | Open. |
-| 5 | Config docs | The example config above and `example.toml` disagree (`drift_save`, `regex`, and `background_range`, which is active here and commented out in `example.toml`). | Open. `example.toml` is to become the single source. |
+| 5 | Config docs | The example config above and `example.toml` disagree (`drift_save` and `regex`). | Open. `example.toml` is to become the single source. |
 | 6 | Linting | `ruff check` reported 26 findings under the configured rule set (E4, E7, E9, F), including unused variables and a bare `except`. | Fixed in `30f6cb9`. CI now enforces it. |
 | 7 | Maxima kernels | Neighbor lookups in `local_maxima_count` and `local_maxima` read out of bounds when `delta` is larger than an image dimension, which crashed the test suite with `cudaErrorIllegalAddress`. Real images are far larger than `delta`, so normal runs were not affected. | Fixed in `5bd0737`. |
 | 8 | Point helpers | `points.estimate_step_size` raised `NameError` because `KDTree` was never imported. Nothing calls it. | Fixed in the `io`/`utils` split. |

@@ -110,12 +110,17 @@ class Params:
 		"Radius of the spherical neighborhood in which a candidate has to be the maximum. "
 		"At most 5, a limit of the GPU kernel.", unit="voxels")
 	delta_fit: int = _f(
-		"Radius of the neighborhood of the raw image used to refine each maximum to a "
-		"sub-voxel position.", unit="voxels")
+		"Radius of the spherical neighborhood around each maximum, in the deconvolved image, "
+		"used to refine its position (the intensity-weighted centroid after subtracting the "
+		"neighborhood minimum) and to compute the scores `a` and `hn`. Between 1 and 5: 0 "
+		"gives NaN scores and no refinement, and above 5 the GPU kernel's buffer truncates the "
+		"neighborhood and biases the position.", unit="voxels")
 	sigmaZ: float = _f(
-		"Width in z of the Gaussian that weights the voxels in the position fit.", unit="voxels")
+		"Width in z of the Gaussian template that the neighborhood is correlated with to "
+		"compute the scores `a` and `hn`. Does not change the position.", unit="voxels")
 	sigmaXY: float = _f(
-		"Width in x and y of the Gaussian that weights the voxels in the position fit.",
+		"Width in x and y of the Gaussian template that the neighborhood is correlated with to "
+		"compute the scores `a` and `hn`. Does not change the position.",
 		unit="voxels")
 
 
@@ -325,7 +330,7 @@ def _check_params(p, section, errors):
 	need(p.beta > 0, f"beta must be positive, got {p.beta}")
 	need(p.blur_radius >= 1, f"blur_radius must be at least 1, got {p.blur_radius}")
 	need(1 <= p.delta <= 5, f"delta must be between 1 and 5, got {p.delta}")
-	need(p.delta_fit >= 0, f"delta_fit must not be negative, got {p.delta_fit}")
+	need(1 <= p.delta_fit <= 5, f"delta_fit must be between 1 and 5, got {p.delta_fit}")
 	need(p.sigmaZ > 0 and p.sigmaXY > 0, "sigmaZ and sigmaXY must be positive")
 
 

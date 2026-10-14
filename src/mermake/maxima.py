@@ -14,7 +14,9 @@ def find_local_maxima(image, threshold=None, delta=1, delta_fit=0, raw=None, sig
 	"""Find local intensity maxima in a 3D image and refine them to sub-voxel positions.
 
 	A voxel is a maximum if it is brighter than ``threshold`` and no voxel within
-	``delta`` of it is brighter. Each maximum is then fitted on the raw image.
+	``delta`` of it is brighter. Its position is then refined to the intensity-weighted
+	centroid of the ``delta_fit`` neighborhood (after subtracting the neighborhood minimum),
+	and two correlation scores are computed against a Gaussian template.
 
 	Parameters
 	----------
@@ -25,12 +27,15 @@ def find_local_maxima(image, threshold=None, delta=1, delta_fit=0, raw=None, sig
 	delta : int
 		Radius in voxels of the spherical neighborhood a maximum has to win. At most 5.
 	delta_fit : int
-		Radius in voxels of the neighborhood of ``raw`` used for the position fit.
+		Radius in voxels of the spherical neighborhood used for the centroid and the scores.
+		At most 5: the kernel holds 600 points, and a larger neighborhood would be truncated.
+		With 0 the position stays at the integer voxel and the scores are NaN.
 	raw : cupy.ndarray
-		(z, y, x) image the fit is done on, same shape as ``image``. Required when
-		any maximum is found.
+		(z, y, x) raw image with the same shape as ``image``, used for the scores ``a`` and
+		``habs``. Required when any maximum is found.
 	sigmaZ, sigmaXY : float
-		Width in voxels of the Gaussian weighting of the fit, in z and in xy.
+		Width in voxels, in z and in xy, of the Gaussian template of the scores ``a`` and ``hn``.
+		They do not change the position.
 	**kwargs
 		Ignored, so a whole settings section can be passed with ``**vars(section)``.
 
@@ -38,9 +43,10 @@ def find_local_maxima(image, threshold=None, delta=1, delta_fit=0, raw=None, sig
 	-------
 	cupy.ndarray
 		float32 array with shape (n, 8) on the GPU. Columns: z, x, y of the refined
-		position (x indexes the second image axis), local background, ``a`` (Gaussian-weighted
-		cross-correlation with ``raw``), ``habs`` (``raw`` at the maximum), ``hn``
-		(Gaussian-weighted cross-correlation with ``image``) and ``h`` (``image`` at the maximum).
+		position (x indexes the second image axis), ``background`` (the minimum of ``image`` in
+		the neighborhood), ``a`` (normalized cross-correlation of the Gaussian template with
+		``raw`` in the neighborhood), ``habs`` (``raw`` at the maximum voxel), ``hn`` (the same
+		correlation with ``image``) and ``h`` (``image`` at the maximum voxel).
 	"""
 	# Ensure the image is in C-contiguous order for the kernel
 	#if not image.flags.c_contiguous:
@@ -53,6 +59,8 @@ def find_local_maxima(image, threshold=None, delta=1, delta_fit=0, raw=None, sig
 
 	if delta > 5:
 		raise TypeError("Delta must be an less than or equal to 5 due to MAX_KERNEL_POINTS")
+	if delta_fit > 5:
+		raise ValueError("delta_fit must be at most 5 due to MAX_KERNEL_POINTS")
 	
 	depth, height, width = image.shape
 	total_voxels = depth * height * width

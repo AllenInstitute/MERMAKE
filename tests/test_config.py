@@ -121,6 +121,8 @@ class TestValidation:
 	def test_value_ranges(self):
 		assert "delta must be between 1 and 5" in self.error(hybs={"delta": 6})
 		assert "beta must be positive" in self.error(dapi={"beta": 0})
+		assert "delta_fit must be between 1 and 5" in self.error(hybs={"delta_fit": 0})
+		assert "delta_fit must be between 1 and 5" in self.error(dapi={"delta_fit": 6})
 
 	def test_ranges_and_regex(self):
 		assert "hyb_range" in self.error(paths=dict(REQUIRED, hyb_range="H1_X_set1"))

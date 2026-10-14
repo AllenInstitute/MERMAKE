@@ -318,3 +318,10 @@ class TestIntegration:
 if __name__ == "__main__":
 	# Run tests when script is executed directly
 	pytest.main([__file__, "-v"])
+
+
+def test_delta_fit_above_kernel_limit_is_rejected():
+	"""The kernel holds 600 points; a larger neighborhood used to be truncated silently."""
+	image = cp.zeros((10, 10, 10), dtype=cp.float32)
+	with pytest.raises(ValueError, match="delta_fit"):
+		find_local_maxima(image, threshold=0.5, delta=1, delta_fit=6, raw=image)

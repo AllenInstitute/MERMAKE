@@ -46,6 +46,7 @@ conflicts = [[{ extra = "cuda11" }, { extra = "cuda12" }]]
 include-package-data = true
 
 [tool.setuptools.packages.find]
+where = ["src"]
 include = ["mermake*"]
 
 [tool.setuptools.package-data]

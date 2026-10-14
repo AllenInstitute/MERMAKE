@@ -1,47 +1,18 @@
-Introduction
-------------
-MERMAKE processes MERFISH, smFISH, and IF imaging data by detecting local intensity maxima (puncta) in 3D image stacks. In multiplexed experiments (MERFISH), these puncta are decoded using a user-supplied codebook, while in smFISH mode and IF, the puncta are simply called and reported as-is.
+# MERMAKE
 
-## Installation
+MERMAKE finds the puncta (local intensity maxima) in 3D fluorescence image stacks from MERFISH, smFISH and IF experiments, and measures the drift of each field of view between imaging rounds. Deconvolution and peak finding run on an NVIDIA GPU with [CuPy](https://cupy.dev). Decoding the puncta against a codebook is not part of MERMAKE yet; it is meant to be done on the output.
 
-MERMAKE needs an **NVIDIA GPU** and CuPy. Pick the extra that matches your CUDA version (`cuda12` for CUDA 12.x, `cuda11` for CUDA 11.x). The extras install CuPy together with the CUDA headers it needs to compile kernels (`cupy-cuda12x[ctk]`), so a separate CUDA Toolkit install is not required. `nvcc` is not needed either, since CuPy compiles kernels with NVRTC.
+## Install
 
-With [uv](https://docs.astral.sh/uv/):
-```
-uv sync --extra cuda12
-uv run mermake settings.toml
+You need an NVIDIA GPU. Pick the extra for your CUDA version, `cuda12` or `cuda11`. No CUDA Toolkit or `nvcc` is needed.
+
+```bash
+uv sync --extra cuda12          # or: python3 -m pip install "mermake[cuda12]"
 ```
 
-With pip:
-```
-python3 -m pip install "mermake[cuda12]"
-```
+## Quickstart
 
-The `cuda11` and `cuda12` extras are mutually exclusive. Add `viz` (`mermake[cuda12,viz]`) for the napari viewer used by `mermake --check`. If CuPy cannot find a GPU, `mermake` stops at startup with an error; see the [CuPy install guide](https://docs.cupy.dev/en/stable/install.html) for driver and CUDA troubleshooting.
-
-## MERMAKE pipe line
-the general steps of the MERMAKE merfish pipeline is:
-Here is a simple flow chart:
-
-```mermaid
-graph TD;
-    A["microscope"]--image capture-->B["zarr \(images\)"];
-    B["zarr \(images\)"]--fitting-->C["xfits \(local maxima\)"];
-    C["xfits \(local maxima\)"]--decoding-->D["decoded"];
-    C["xfits \(local maxima\)"]--segmentation-->S["segm"];
-    D["decoded"]---->E["final spots"];
-    S["segm"]---->E["final spots"];
-    E["final spots"]---->F["h5ad"];
-
-```
-
-##  MERMAKE Usage
-
-```
-mermake settings.toml
-```
-
-The settings file is TOML. Only the `[paths]` section is required, and it needs five keys: `psf_file`, `flat_field_tag`, `hyb_folders`, `hyb_range` and `output_folder` (plus the optional `fov_range`). Every other setting has a default, so `[hybs]` and `[dapi]` only list what you want to change. Relative paths are resolved against the folder that holds the settings file.
+Write a settings file with the five required paths:
 
 ```toml
 [paths]
@@ -50,66 +21,27 @@ flat_field_tag = 'flat_field/Scope3_'
 hyb_folders = ['experiment_folder']
 hyb_range = 'H1_BICAN_set1:H16_BICAN_set1'
 output_folder = 'output'
-
-[hybs]
-threshold = 4000   # override one deconvolution/peak-finding setting
 ```
 
-The settings are checked before the GPU is touched. Misspelled keys, wrong types, out of range values and missing files are all reported at once, for example `[hybs] unknown key 'threshhold', did you mean 'threshold'?`.
+Check it without a GPU, then run it:
 
-| Command | What it does |
-|---------|--------------|
-| `mermake --print-example` | print a minimal commented settings file to start from |
-| `mermake --print-config settings.toml` | print **every** setting with its description, unit and the value that will be used (defaults filled in); needs no GPU |
-| `mermake --dry-run settings.toml` | validate and list the images that would be processed; needs no GPU |
-
-`--print-config` is the reference for what each setting means. In short, `patch_size` and `patch_overlap` describe the xy patches the image is cut into for FFT deconvolution (not the raw image size), `beta` and `blur_radius` shape the deconvolution, and `threshold`, `delta`, `delta_fit`, `sigmaZ` and `sigmaXY` control the peak finding. To use multiple PSFs, set `patch_size` to the spacing of the PSF sampling grid (for example 300).
-
-## 🔍 If you only want to process the dapi channels a trick that you can use is
-To set the `hyb_save` toml string to not be dynamic and with different names for each fov and hyb.
-```
-hyb_save =  'Xhfits.npz'
-dapi_save = '{fov}--{tag}--dapiFeatures.npz'
-```
-What this does is trick mermake into thinking the hybs for each fov and channel has already been processed due
-to the existing Xhfits.npz file
-
-## Development
-
-```
-uv sync --extra cuda12   # runtime plus the dev group (pytest, ruff)
-uv run pytest tests/ -v  # tests marked "gpu" skip themselves without cupy or a CUDA device
-uv run ruff check
-uv build
+```bash
+uv run mermake --dry-run settings.toml    # validate and list the images
+uv run mermake settings.toml              # process; existing results are skipped
 ```
 
-Tests that need a GPU (the kernels, deconvolution, alignment and the end-to-end run in `tests/test_pipeline_e2e.py`) are marked `gpu`. Without a CUDA device they are skipped, so the filename, config and CLI tests run anywhere (`uv sync && uv run pytest`). GitHub Actions runs lint, the CPU tests on Python 3.10 and 3.13, and a wheel build; the full suite has to be run on a GPU machine.
+`mermake --print-config settings.toml` prints every setting with its description and the value that will be used.
 
-Source layout (`src/mermake/`):
+## Documentation
 
-| Module | Contents |
-|--------|----------|
-| `cli.py`, `__main__.py` | argument parsing, `--print-config`, `--dry-run`, `mermake` entry point |
-| `pipeline.py` | the processing loop: dapi, per-channel maxima, drift, save |
-| `io/` | `readers` (zarr/flat fields), `naming` (filename parsing, `FolderFilter`), `queue` (`ImageQueue`, `Block`), `metadata` (XML) |
-| `gpu/` | CuPy kernels and helpers: `blur`, `fill`, `elementwise`, `fft`, `runtime`, and the `.cu` sources in `kernels/` |
-| `deconvolver.py`, `maxima.py`, `align.py` | deconvolution, local-maxima detection, drift and alignment |
-| `config.py` | the settings: typed dataclasses with defaults, per-setting docs and validation |
-| `points.py`, `viz.py` | point clustering helpers, napari viewer |
+- [Installation](docs/installation.md) and [quickstart on the example data](docs/quickstart.md)
+- [Pipeline overview](docs/pipeline.md)
+- [Configuration reference](docs/configuration.md)
+- [Input and output formats](docs/io-formats.md)
+- [Developer guide](docs/developer.md), [known issues](docs/known-issues.md) and the [changelog](CHANGELOG.md)
 
-## Known issues
+To build the site: `uv run --group docs mkdocs serve`. See [CONTRIBUTING.md](CONTRIBUTING.md) to contribute.
 
-Bugs and rough edges found during the package restructuring. Entries are kept until fixed.
+## License
 
-| # | Area | Issue | Status |
-|---|------|-------|--------|
-| 2 | Test fixtures | `tests/examples/single/out/*.npz` do not match the output of the current code (nor of the code before the restructuring), so they are from an older version and cannot be used as a regression reference. The `deconv.300.*.npz` planes there were made before the z-shift fix (#10) and are one plane off in z; `test_full_deconv_full` compensates. | Open. Regenerate them or replace them with a small fixture. |
-| 3 | Test data size | `tests/examples/` is about 287 MB tracked in git. | Open. Plan: a small fixture in git, the full data as a Code Ocean data asset. |
-| 4 | Tests | `test_with_mocked_blur` in `tests/test_deconvolver.py` is never collected, so it does not run. | Open. |
-| 6 | Linting | `ruff check` reported 26 findings under the configured rule set (E4, E7, E9, F), including unused variables and a bare `except`. | Fixed in `30f6cb9`. CI now enforces it. |
-| 7 | Maxima kernels | Neighbor lookups in `local_maxima_count` and `local_maxima` read out of bounds when `delta` is larger than an image dimension, which crashed the test suite with `cudaErrorIllegalAddress`. Real images are far larger than `delta`, so normal runs were not affected. | Fixed in `5bd0737`. |
-| 8 | Point helpers | `points.estimate_step_size` raised `NameError` because `KDTree` was never imported. Nothing calls it. | Fixed in the `io`/`utils` split. |
-| 9 | Compare script | `scripts/compare_xh.py` used undefined `ref_data`/`temp_data` in its `Xh_minus` check. | Fixed in the `__main__` split. |
-| 10 | Deconvolution | Reported positions were shifted by +1 voxel along any axis whose padded length is odd (`Deconvolver` rolled the padded PSF by `-N // 2`, which floors to `-ceil(N / 2)`). For z, `N = 3 * depth - 2`, so every odd z depth (for example 35 planes) was affected. The `habs` and `a` columns, which sample the raw image at the maximum, were therefore taken one plane off. | Fixed. Results from earlier versions have z one higher than now for odd depths. `tests/test_deconvolver.py::TestPositionPreserved` covers it. |
-| 11 | Deconvolution | `Deconvolver.apply` leaves the last `2 * patch_overlap` columns (and rows) of its output uninitialized when the image is no wider than `patch_size`, because the first patch skips the right-edge reflection. Real images are larger than `patch_size` (for example 1200 against 500), so normal runs are not affected. | Open. Found while writing the test for #10. |
-| 12 | Dead code | `points.find_two_means` is unused and fits 3 clusters although its name says two. | Open. Remove or fix. |
+GNU General Public License v3, see [LICENSE](LICENSE).

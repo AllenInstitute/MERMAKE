@@ -1,0 +1,68 @@
+site_name: MERMAKE
+site_description: GPU puncta detection for MERFISH and smFISH images
+repo_url: https://github.com/deprekate/mermake
+edit_uri: edit/dev/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Quickstart: quickstart.md
+  - Pipeline overview: pipeline.md
+  - Configuration: configuration.md
+  - Input and output formats: io-formats.md
+  - API reference:
+      - Settings and CLI: api/settings.md
+      - Processing: api/processing.md
+      - Input and output: api/io.md
+      - GPU helpers: api/gpu.md
+  - Developer guide: developer.md
+  - Known issues: known-issues.md
+  - Changelog: changelog.md
+
+hooks:
+  - scripts/mkdocs_hooks.py
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: numpy
+            show_root_heading: true
+            show_source: false
+            members_order: source
+            heading_level: 3
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format

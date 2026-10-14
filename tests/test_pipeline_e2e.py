@@ -14,14 +14,9 @@ import pytest
 pytest.importorskip("cupy")
 pytestmark = pytest.mark.gpu
 
-NZ, NY, NX = 12, 96, 96   # z planes per channel (even, see note below), image height and width
+NZ, NY, NX = 12, 96, 96   # z planes per channel, image height and width
 NCOL = 3                  # hyb colors plus the trailing dapi channel
 OVERLAP = 8
-
-# Note: the sizes are even on purpose. Deconvolver rolls the padded PSF by
-# -N // 2, which is off by one voxel when a padded axis length N is odd
-# (2 * zpad + depth is odd for an odd z depth), shifting reported positions
-# by +1 along that axis. See "Known issues" in the README.
 
 # (z, y, x) of the planted spots, well away from the patch borders
 SPOTS = {

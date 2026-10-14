@@ -436,7 +436,10 @@ class TestFullDeconv:
 		# effectively demanded bit-identical output and broke whenever the CuPy/CUDA
 		# build changed. atol=2 covers last-bit quantization; rtol=1e-2 covers the small
 		# proportional drift from FFT/library version differences.
-		cp.testing.assert_allclose(result.astype(cp.float16), expected, rtol=1e-2, atol=2)
+		# The stored planes were made before the odd-size PSF roll was fixed, so they are shifted
+		# by one plane in z (expected[z] is the deconvolution of plane z - 1). Compare with that
+		# offset; plane 0 of the result has no counterpart. Regenerate the files to drop this.
+		cp.testing.assert_allclose(result[:-1].astype(cp.float16), expected[1:], rtol=1e-2, atol=2)
 
 
 class TestIntegrationAndPerformance:
@@ -526,3 +529,33 @@ class TestMockDependencies:
 
 if __name__ == "__main__":
 	pytest.main([__file__, "-v"])
+
+
+class TestPositionPreserved:
+	"""Deconvolution must not move features, whatever the parity of the padded sizes.
+
+	The padded PSF is rolled so its peak (at n // 2) sits at index 0. An off-by-one there
+	shifted the result by a voxel along every axis whose padded length is odd.
+	"""
+
+	IMAGE_XY = 40  # larger than patch_size, so the image is made of several patches
+
+	@staticmethod
+	def psf():
+		zz, yy, xx = np.meshgrid(np.arange(-3, 3), np.arange(-5, 5), np.arange(-5, 5), indexing="ij")
+		psf = np.exp(-(zz**2 / 2.0 + (yy**2 + xx**2) / (2 * 1.5**2))).astype(np.float32)
+		return psf / psf.sum()
+
+	# padded z is depth + 2*zpad = 3*depth - 2, so odd for odd depth; padded xy is
+	# patch_size + 2*patch_overlap, so odd for odd patch_size
+	@pytest.mark.parametrize("depth", [11, 12])
+	@pytest.mark.parametrize("patch_size", [24, 25])
+	def test_peak_stays_put(self, depth, patch_size):
+		n = self.IMAGE_XY
+		spot = (depth // 2, 30, 12)  # second patch in x, first in y
+		image = cp.zeros((depth, n, n), dtype=cp.float32)
+		image[spot] = 1000.0
+		deconv = Deconvolver(self.psf(), image.shape, patch_size=patch_size, zpad=depth - 1,
+		                     patch_overlap=8, beta=0.0001)
+		out = deconv.apply(image)
+		assert np.unravel_index(int(cp.argmax(out)), out.shape) == spot

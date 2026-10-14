@@ -90,7 +90,9 @@ class Deconvolver:
 			psf_stack = self.center_psf(psfs)
 			psf_stack = self.center_psf(psfs)[None, ...]
 		psf_stack = np.pad(psf_stack, ((0, 0), (zpad, zpad), (patch_overlap, patch_overlap), (patch_overlap, patch_overlap)), mode='constant')
-		shift = -np.array(psf_stack.shape[1:]) // 2
+		# put the PSF peak (at n // 2) at index 0. Note -(n // 2), not -n // 2: the latter floors to
+		# -ceil(n / 2), one voxel too far whenever n is odd
+		shift = -(np.array(psf_stack.shape[1:]) // 2)
 		psf_stack[:] = np.roll(psf_stack, shift=shift, axis=(1,2,3))
 		
 		psf_fft = xp.empty_like(psf_stack, dtype=xp.complex64)

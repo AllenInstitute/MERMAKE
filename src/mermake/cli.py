@@ -19,7 +19,7 @@ def is_valid_file(path):
 	except Exception as e:
 		raise argparse.ArgumentTypeError(f"Error loading TOML file {path}: {e}")
 
-toml_text = """
+toml_text = r"""
         [paths]
         codebook = 'codebook.csv'
         psf_file = 'psf_file.npy'

@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv run --no-project --with ruff ruff check src tests scripts
+
+  test:
+    # CPU only: tests marked "gpu" skip themselves when cupy or a CUDA device is
+    # missing. Run the full suite (uv sync --extra cuda12 && uv run pytest) on a
+    # machine with a GPU.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --locked
+      - run: uv run pytest tests -v -rs
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      - name: Check the wheel ships the CUDA kernels
+        run: unzip -l dist/*.whl | grep -E "gpu/kernels/(blur|maxima)\.cu"

@@ -116,10 +116,12 @@ to the existing Xhfits.npz file
 
 ```
 uv sync --extra cuda12   # runtime plus the dev group (pytest, ruff)
-uv run pytest tests/ -v  # the tests need a CUDA GPU
+uv run pytest tests/ -v  # tests marked "gpu" skip themselves without cupy or a CUDA device
 uv run ruff check
 uv build
 ```
+
+Tests that need a GPU (the kernels, deconvolution, alignment and the end-to-end run in `tests/test_pipeline_e2e.py`) are marked `gpu`. Without a CUDA device they are skipped, so the filename, config and CLI tests run anywhere (`uv sync && uv run pytest`). GitHub Actions runs lint, the CPU tests on Python 3.10 and 3.13, and a wheel build; the full suite has to be run on a GPU machine.
 
 Source layout (`src/mermake/`):
 
@@ -143,7 +145,9 @@ Bugs and rough edges found during the package restructuring. Entries are kept un
 | 3 | Test data size | `tests/examples/` is about 287 MB tracked in git. | Open. Plan: a small fixture in git, the full data as a Code Ocean data asset. |
 | 4 | Tests | `test_with_mocked_blur` in `tests/test_deconvolver.py` is never collected, so it does not run. | Open. |
 | 5 | Config docs | The example config above and `example.toml` disagree (`drift_save`, `regex`, and `background_range`, which is active here and commented out in `example.toml`). | Open. `example.toml` is to become the single source. |
-| 6 | Linting | `ruff check` reports about 84 pre-existing findings. | Open. |
+| 6 | Linting | `ruff check` reported 26 findings under the configured rule set (E4, E7, E9, F), including unused variables and a bare `except`. | Fixed in `30f6cb9`. CI now enforces it. |
 | 7 | Maxima kernels | Neighbor lookups in `local_maxima_count` and `local_maxima` read out of bounds when `delta` is larger than an image dimension, which crashed the test suite with `cudaErrorIllegalAddress`. Real images are far larger than `delta`, so normal runs were not affected. | Fixed in `5bd0737`. |
 | 8 | Point helpers | `points.estimate_step_size` raised `NameError` because `KDTree` was never imported. Nothing calls it. | Fixed in the `io`/`utils` split. |
 | 9 | Compare script | `scripts/compare_xh.py` used undefined `ref_data`/`temp_data` in its `Xh_minus` check. | Fixed in the `__main__` split. |
+| 10 | Deconvolution | Reported positions are shifted by +1 voxel along any axis whose padded length is odd. `Deconvolver` rolls the padded PSF by `-N // 2`, which is one voxel too far when `N` is odd. For z, `N = 2 * zpad + depth`, so every odd z depth (for example 35 planes per channel) gives z coordinates that are +1. x and y are not affected with the default even `tile_size` and `overlap`. A constant shift does not hurt decoding, but it matters when comparing to other data. Found by `tests/test_pipeline_e2e.py`. | Open. Fixing it changes output coordinates. |
+| 11 | Dead code | `config.count_colors` globs for `*<name>.zarr.xml` but the metadata file is `<name>.xml`, so it would fail with `IndexError`. `Config`, `count_bits`, `count_colors` and `count_hybs` are not called anywhere. `points.find_two_means` is also unused and fits 3 clusters although its name says two. | Open. Remove or fix. |

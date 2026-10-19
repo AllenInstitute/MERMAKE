@@ -331,12 +331,15 @@ class Deconvolver:
 		psf_shape = xp.array(psf.shape)
 		psff = xp.zeros(tuple(target_shape.tolist()), dtype=psf.dtype)  # Use same dtype for consistency
 	
-		# Compute start & end indices for both source (psf) and target (psff)
-		start_psff = xp.maximum(0, (target_shape - psf_shape) // 2)
-		end_psff = start_psff + xp.minimum(target_shape, psf_shape)
-	
-		start_psf = xp.maximum(0, (psf_shape - target_shape) // 2)
-		end_psf = start_psf + xp.minimum(target_shape, psf_shape)
+		# The PSF peak is at n // 2 of the PSF and must end up at n // 2 of the target, which is
+		# what the roll in __init__ assumes. Centering with (target - psf) // 2 is one voxel short
+		# when the PSF is odd and the target even (every spot would then be shifted by a voxel).
+		offset = target_shape // 2 - psf_shape // 2
+		start_psff = xp.maximum(0, offset)
+		start_psf = xp.maximum(0, -offset)
+		size = xp.minimum(psf_shape - start_psf, target_shape - start_psff)
+		end_psff = start_psff + size
+		end_psf = start_psf + size
 	
 		# Assign using slices
 		slices_psff = tuple(slice(int(s), int(e)) for s, e in zip(start_psff, end_psff))

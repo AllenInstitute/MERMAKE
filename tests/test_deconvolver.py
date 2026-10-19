@@ -181,6 +181,18 @@ class TestDeconvolverMethods:
 		assert result.shape == (20, 50, 50)
 		assert np.allclose(result.sum(), 1.0)  # Should be normalized
 	
+	@pytest.mark.parametrize("psf_shape", [(15, 31, 31), (14, 30, 30), (15, 30, 31), (21, 51, 51), (30, 76, 76)])
+	def test_center_psf_puts_the_peak_at_n_over_2(self, deconv_instance, psf_shape):
+		"""The peak of a PSF, at n // 2 of its own array, ends up at n // 2 of the padded array.
+
+		Odd and even sizes, padded or cropped. (An odd PSF in an even array used to end up one
+		voxel short, which shifted every deconvolved spot by one voxel along each axis.)
+		"""
+		psf = np.zeros(psf_shape)
+		psf[tuple(n // 2 for n in psf_shape)] = 1.0
+		result = deconv_instance.center_psf(psf)
+		assert np.unravel_index(np.argmax(result), result.shape) == (10, 25, 25)
+
 	def test_patched_basic(self, deconv_instance):
 		"""Test basic tiling functionality."""
 		image = np.random.random((20, 100, 100))
@@ -291,6 +303,26 @@ class TestDeconvolverProcessing:
 		
 		assert result.shape == image.shape
 		assert np.all(np.isfinite(result))
+
+
+	@pytest.mark.parametrize("psf_shape", [(7, 13, 13), (8, 14, 14)])
+	def test_apply_does_not_move_a_point_source(self, psf_shape):
+		"""A point blurred with the PSF is deconvolved back to the voxel it started in (odd or even PSF)."""
+		from scipy.signal import fftconvolve
+
+		grids = np.meshgrid(*(np.arange(n) - n // 2 for n in psf_shape), indexing="ij")
+		psf = np.exp(-(grids[0] ** 2 / (2 * 1.0 ** 2) + (grids[1] ** 2 + grids[2] ** 2) / (2 * 1.5 ** 2)))
+		psf /= psf.sum()
+		position = (6, 21, 27)
+		point = np.zeros((12, 50, 50))
+		point[position] = 1000.0
+		# a centred kernel of any size: np.roll of the padded psf puts its peak (n // 2) at the origin
+		blurred = np.real(np.fft.ifftn(np.fft.fftn(point) * np.fft.fftn(
+			np.roll(np.pad(psf, [(0, t - n) for t, n in zip(point.shape, psf_shape)]),
+			        [-(n // 2) for n in psf_shape], axis=(0, 1, 2)))))
+		deconv = Deconvolver(psfs=psf, channel_shape=point.shape, patch_size=30, patch_overlap=8, zpad=3, beta=1e-4)
+		result = cp.asnumpy(deconv.apply(cp.asarray(blurred.astype(np.float32))))
+		assert np.unravel_index(np.argmax(result), result.shape) == position
 
 
 class TestDeconvolverEdgeCases:

@@ -6,7 +6,7 @@ import zarr
 
 pytest.importorskip("cupy")  # mermake.io.readers imports cupy
 
-from mermake.io.readers import Container, array_path, load_flats, read_im, sum_channel_pair
+from mermake.io.readers import Container, array_path, color_indices, dapi_index, load_flats, read_im, sum_channel_pair
 
 NCH, NZ, NY, NX = 5, 4, 8, 8
 XML = ('<root><z_offsets type="string">0:-15:-0.4:{n}</z_offsets>'
@@ -127,3 +127,20 @@ class TestSumChannels:
 	def test_needs_channels(self):
 		with pytest.raises(ValueError, match="sum_channels"):
 			sum_channel_pair(da.zeros((10, 4, 4), dtype=np.uint16), [0, 1])
+
+
+class TestDapiChannel:
+	def test_default_is_last(self):
+		assert dapi_index(4) == 3
+		assert color_indices(4) == [0, 1, 2]
+
+	def test_first(self):
+		assert dapi_index(4, 0) == 0
+		assert color_indices(4, 0) == [1, 2, 3]
+
+	def test_middle(self):
+		assert color_indices(4, 2) == [0, 1, 3]
+
+	def test_out_of_range(self):
+		with pytest.raises(ValueError, match="dapi_channel"):
+			dapi_index(4, 4)

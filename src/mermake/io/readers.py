@@ -7,6 +7,24 @@ import cupy as cp
 import numpy as np
 from ..gpu import blur
 
+def dapi_index(ncol, dapi_channel=-1):
+	"""Index of the dapi channel in an image with ``ncol`` channels (after any ``sum_channels`` merge).
+
+	``dapi_channel`` is a channel index, or ``-1`` for the last channel.
+	"""
+	index = ncol - 1 if dapi_channel == -1 else dapi_channel
+	if not 0 <= index < ncol:
+		raise ValueError(f"dapi_channel {dapi_channel} is outside the {ncol} channels of the image")
+	return index
+
+def color_indices(ncol, dapi_channel=-1):
+	"""Image indices of the hyb color channels: every channel but dapi, in stored order.
+
+	Color ``icol`` of the results (thresholds, file names) is channel ``color_indices(...)[icol]``.
+	"""
+	dapi = dapi_index(ncol, dapi_channel)
+	return [i for i in range(ncol) if i != dapi]
+
 def center_crop(A, shape):
 	"""Crop numpy array to (h, w) from center."""
 	h, w = shape[-2:]
@@ -43,7 +61,7 @@ def load_flats(flat_field_tag, shape=None, **kwargs):
 	Returns
 	-------
 	cupy.ndarray
-	    float32 array with shape ``(n_files, y, x)``. The last entry is used for the dapi channel.
+	    float32 array with shape ``(n_files, y, x)``. One entry per image channel, indexed like the image (so the dapi channel uses its own entry).
 	"""
 	stack = list()
 	files = sorted(glob.glob(flat_field_tag + '*'))
@@ -176,7 +194,7 @@ def read_im(path, return_pos=False, sum_channels=None):
 	array at that path or, for older acquisitions, ``<round folder>/<fov>/data`` (see
 	:func:`array_path`). If ``<name>_<fov>.xml`` exists, the planes are reshaped to
 	``(channels, z, y, x)`` using the number of channels, which is the last number of the
-	``z_offsets`` field (the dapi channel comes last). Old acquisitions wrote one extra leading
+	``z_offsets`` field (dapi is the last channel unless ``[paths] dapi_channel`` says otherwise). Old acquisitions wrote one extra leading
 	plane, so the first plane is dropped when the plane count is one more than a multiple of the
 	number of channels. Without an XML file the first plane is always dropped.
 	8-bit images are squared and returned as uint16.

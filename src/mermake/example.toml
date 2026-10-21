@@ -20,6 +20,8 @@ output_folder = 'MERFISH_Analysis_MERMAKE'
 fov_range = '0:1'
 # Optional: sum two channels that are two exposures of the same color
 #sum_channels = [0, 1]
+# Optional: index of the dapi channel after summing (default -1, the last channel)
+#dapi_channel = 0
 
 # Example overrides, uncomment to change:
 #[hybs]

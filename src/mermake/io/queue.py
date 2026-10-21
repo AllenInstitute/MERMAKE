@@ -8,7 +8,7 @@ from itertools import chain
 
 import cupy as cp
 from .. import __version__
-from .readers import read_im, Container
+from .readers import read_im, Container, color_indices, dapi_index
 from .naming import get_ih, get_ifov, get_iset, FolderFilter
 from ..config import namespace_to_array
 from . import spots
@@ -128,15 +128,15 @@ class ImageQueue:
 		iset = get_iset(path)
 		ifov = get_ifov(path)
 		ih = get_ih(os.path.dirname(path))
-		for icol in range(self.shape[0] - 1):
+		for icol, chan in enumerate(color_indices(self.shape[0], self.dapi_channel)):
 			# only compute if the image has not been processed
 			if not self._is_done(path, icol):
-				container[icol].compute()
+				container[chan].compute()
 			else:
 				setattr(container, f'col{icol}', self._load(path, icol, 'Xh'))
 		icol = -1
 		if not self._is_done(path, icol):
-			container[icol].compute()
+			container[dapi_index(self.shape[0], self.dapi_channel)].compute()
 		else:
 			container.Xh_plus = self._load(path, icol, 'Xh_plus')
 			container.Xh_minus = self._load(path, icol, 'Xh_minus')

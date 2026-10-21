@@ -15,10 +15,11 @@ def view_napari(queue, deconvolver, args):
 	import napari
 	viewer = napari.Viewer()
 	color = ['red','green','blue', 'white']
+	from .io.readers import color_indices, dapi_index
 	ncol = queue.shape[0]
-	for icol in range(ncol-1):
-		chan = cp.asarray(image[icol].compute())
-		flat = flats[icol]
+	for icol, ichan in enumerate(color_indices(ncol, args.paths.dapi_channel)):
+		chan = cp.asarray(image[ichan].compute())
+		flat = flats[ichan]
 		deconvolver.hybs.apply(chan, flat_field=flat, output=buffer, blur_radius=None)
 		deco = cp.asnumpy(buffer)
 		deconvolver.hybs.apply(chan, flat_field=flat, output=buffer, **vars(args.hybs))
@@ -31,8 +32,9 @@ def view_napari(queue, deconvolver, args):
 		points = cp.asnumpy(Xh[:, :3])
 		viewer.add_points(points, size=7, border_color=color[icol],face_color='transparent', opacity=0.6, name=f"maxima {icol}")
 	icol += 1
-	chan = cp.asarray(image[icol].compute())
-	flat = flats[icol]
+	dapi = dapi_index(ncol, args.paths.dapi_channel)
+	chan = cp.asarray(image[dapi].compute())
+	flat = flats[dapi]
 	deconvolver.dapi.apply(chan, flat_field=flat, output=buffer, blur_radius=None)
 	deco = cp.asnumpy(buffer)
 	deconvolver.dapi.apply(chan, flat_field=flat, output=buffer, **vars(args.dapi))

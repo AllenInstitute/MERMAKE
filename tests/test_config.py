@@ -149,6 +149,11 @@ class TestValidation:
 		for bad in ([0], [0, 1, 2], [1, 1], [-1, 1]):
 			assert "sum_channels must be two different" in self.error(paths=dict(REQUIRED, sum_channels=bad))
 
+	def test_dapi_channel(self):
+		assert load().paths.dapi_channel == -1
+		assert load(paths=dict(REQUIRED, dapi_channel=0)).paths.dapi_channel == 0
+		assert "dapi_channel must be -1" in self.error(paths=dict(REQUIRED, dapi_channel=-2))
+
 	def test_all_errors_reported_together(self):
 		msg = self.error(hybs={"threshhold": 5}, dapi={"beta": -1, "delta": 9})
 		assert msg.count("\n") == 2

@@ -11,7 +11,7 @@ from .config import ConfigError
 from .align import drift, drift_save
 from .deconvolver import Deconvolver
 from .io.queue import ImageQueue, Block
-from .io.readers import load_flats
+from .io.readers import load_flats, color_indices, dapi_index
 from .io.spots import KIND_HYB, KIND_DAPI_PLUS, KIND_DAPI_MINUS
 from .maxima import find_local_maxima
 
@@ -51,9 +51,9 @@ def build_deconvolvers(psfs, chan_shape, args):
 
 def process_dapi(image, queue, ctx):
 	"""Find the dapi maxima (positive and negative) and save them."""
-	icol = -1
-	data = image[icol].data
-	flat = ctx.flats[icol]
+	icol = -1  # dapi results are saved as channel -1 whatever its index in the image
+	data = image[ctx.dapi].data
+	flat = ctx.flats[ctx.dapi]
 	if isinstance(data, da.Array):
 		return
 	args, chan, buffer = ctx.args, ctx.chan, ctx.buffer
@@ -126,11 +126,12 @@ def find_hyb_maxima(chan, flat, ctx, negate=False, **overrides):
 
 def process_hyb_channel(image, icol, queue, ctx):
 	"""Process one color channel of ``image`` and save its maxima."""
-	data = image[icol].data
+	chan = ctx.colors[icol]
+	data = image[chan].data
 	if isinstance(data, da.Array):
 		return
 	ctx.chan.set(data)
-	Xhf, stats = find_hyb_maxima(ctx.chan, ctx.flats[icol], ctx,
+	Xhf, stats = find_hyb_maxima(ctx.chan, ctx.flats[chan], ctx,
 	                              threshold=hyb_threshold(ctx.args.hybs, icol))
 	setattr(image, f'col{icol}', Xhf)
 	ctx.executor.submit(queue.save_results, image, icol, {KIND_HYB: stats})
@@ -157,7 +158,7 @@ def process_image(image, queue, ctx):
 	print('running on:', image.path, flush=True)
 	process_dapi(image, queue, ctx)
 
-	for icol in range(ctx.ncol - 1):
+	for icol in range(len(ctx.colors)):
 		process_hyb_channel(image, icol, queue, ctx)
 	# this block of images for a fov is over
 	finish_block(image, ctx)
@@ -180,7 +181,7 @@ def run(args):
 		threshold = args.hybs.threshold
 		if isinstance(threshold, list) and len(threshold) != ncol - 1:
 			raise ConfigError(f"[hybs] threshold has {len(threshold)} values but the images have "
-			                  f"{ncol - 1} color channels (the last channel is dapi)")
+			                  f"{ncol - 1} color channels (channel {dapi_index(ncol, args.paths.dapi_channel)} is dapi)")
 
 		# buffers to copy into
 		buffer = cp.empty(chan_shape, dtype=cp.float32)
@@ -197,7 +198,8 @@ def run(args):
 			view_napari(queue, deconvolver, args)
 
 		ctx = SimpleNamespace(
-			args=args, ncol=ncol, buffer=buffer, chan=chan, flats=flats,
+			args=args, ncol=ncol, dapi=dapi_index(ncol, args.paths.dapi_channel),
+			colors=color_indices(ncol, args.paths.dapi_channel), buffer=buffer, chan=chan, flats=flats,
 			deconvolver=deconvolver, executor=executor, block=Block(),
 		)
 

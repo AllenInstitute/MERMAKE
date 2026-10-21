@@ -109,7 +109,7 @@ def sample(args, n_images=3, seed=0, floor_sigmas=4.0, dapi_floor=1.5, log=print
 	"""
 	import cupy as cp
 	from .io.naming import FolderFilter
-	from .io.readers import Container, load_flats, read_im
+	from .io.readers import Container, color_indices, dapi_index, load_flats, read_im
 	from .pipeline import build_config, build_deconvolvers, find_hyb_maxima
 	from .maxima import find_local_maxima
 
@@ -131,24 +131,26 @@ def sample(args, n_images=3, seed=0, floor_sigmas=4.0, dapi_floor=1.5, log=print
 	chan = cp.empty(chan_shape, dtype=cp.uint16)
 	ctx = SimpleNamespace(args=args, deconvolver=build_deconvolvers(psfs, chan_shape, args))
 
+	colors = color_indices(ncol, paths.dapi_channel)
+	dapi = dapi_index(ncol, paths.dapi_channel)
 	found = {icol: dict(pos=[], neg=[], floor=None) for icol in (*range(ncol - 1), DAPI)}
 	for path in chosen:
 		log(f"sampling {path}")
 		container = Container(path, sum_channels=paths.sum_channels)
-		for icol in range(ncol - 1):
-			container[icol].compute()
-			chan.set(container[icol].data)
+		for icol, ichan in enumerate(colors):
+			container[ichan].compute()
+			chan.set(container[ichan].data)
 			entry = found[icol]
 			if entry["floor"] is None:
-				entry["floor"] = _noise_floor(chan, flats[icol], ctx, floor_sigmas)
+				entry["floor"] = _noise_floor(chan, flats[ichan], ctx, floor_sigmas)
 			floor = entry["floor"]
 			for key, negate in (("pos", False), ("neg", True)):
-				Xh, _ = find_hyb_maxima(chan, flats[icol], ctx, negate=negate, threshold=floor)
+				Xh, _ = find_hyb_maxima(chan, flats[ichan], ctx, negate=negate, threshold=floor)
 				entry[key].append(cp.asnumpy(Xh[:, H]))
-		container[-1].compute()
-		chan.set(container[-1].data)
+		container[dapi].compute()
+		chan.set(container[dapi].data)
 		params = {**vars(args.dapi), "threshold": dapi_floor}
-		ctx.deconvolver.dapi.apply(chan, flat_field=flats[-1], output=buffer, **vars(args.dapi))
+		ctx.deconvolver.dapi.apply(chan, flat_field=flats[dapi], output=buffer, **vars(args.dapi))
 		std = float(cp.linalg.norm(buffer.ravel()) / cp.sqrt(buffer.size))
 		cp.divide(buffer, std, out=buffer)
 		entry = found[DAPI]

@@ -69,6 +69,11 @@ class Paths:
 		"acquisitions where one color was imaged twice to double its exposure. The sum is "
 		"stored at the lower index and the image has one channel fewer, so the flat fields must "
 		"match the merged count. Default: none.", default=None)
+	dapi_channel: int = _f(
+		"Advanced. Index of the dapi channel (0-based, counted after any `sum_channels` merge), or "
+		"-1 for the last channel. The other channels are the hyb colors, numbered in stored order "
+		"without the dapi channel. The flat fields are matched to the channels by this same index.",
+		default=-1)
 	hyb_save: str = _f(
 		"Advanced. Filename template for the maxima of each color channel. Placeholders: "
 		"{fov} (zarr name), {tag} (round folder name), {icol} (color channel index).",
@@ -413,6 +418,9 @@ def _check_paths(p, base_dir, check_files, errors):
 		if len(p.sum_channels) != 2 or p.sum_channels[0] == p.sum_channels[1] or min(p.sum_channels) < 0:
 			errors.append(f"[paths] sum_channels must be two different channel indices, "
 			              f"0 or more, got {p.sum_channels!r}")
+	if isinstance(p.dapi_channel, int) and p.dapi_channel < -1:
+		errors.append(f"[paths] dapi_channel must be -1 (the last channel) or a channel index, "
+		              f"0 or more, got {p.dapi_channel!r}")
 	if p.fov_range is not None:
 		try:
 			low, high = map(float, p.fov_range.split(":"))

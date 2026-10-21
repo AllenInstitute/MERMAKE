@@ -174,9 +174,11 @@ def read_im(path, return_pos=False, sum_channels=None):
 
 	``path`` is the ``<name>_<fov>.zarr`` entry of a round folder. The data itself is the zarr
 	array at that path or, for older acquisitions, ``<round folder>/<fov>/data`` (see
-	:func:`array_path`). The first plane is dropped. If ``<name>_<fov>.xml``
-	exists, the remaining planes are reshaped to ``(channels, z, y, x)`` using the number of
-	channels, which is the last number of the ``z_offsets`` field (the dapi channel comes last).
+	:func:`array_path`). If ``<name>_<fov>.xml`` exists, the planes are reshaped to
+	``(channels, z, y, x)`` using the number of channels, which is the last number of the
+	``z_offsets`` field (the dapi channel comes last). Old acquisitions wrote one extra leading
+	plane, so the first plane is dropped when the plane count is one more than a multiple of the
+	number of channels. Without an XML file the first plane is always dropped.
 	8-bit images are squared and returned as uint16.
 
 	Parameters
@@ -202,9 +204,8 @@ def read_im(path, return_pos=False, sum_channels=None):
 	#z = zarr.open(file_, mode='r')
 	#image = np.array(z[1:])
 	from dask import array as da
-	image = da.from_zarr(file_)[1:]
+	image = da.from_zarr(file_)
 
-	shape = image.shape
 	xml_file = os.path.splitext(path)[0] + '.xml'
 	if os.path.exists(xml_file):
 		txt = open(xml_file, 'r').read()
@@ -215,9 +216,16 @@ def read_im(path, return_pos=False, sum_channels=None):
 		x, y = eval(txt.split(tag)[-1].split('</')[0])
 
 		nchannels = int(zstack.split(':')[-1])
+		# Old acquisition software wrote one extra leading frame (e.g. 201 for 5 channels x 40 planes).
+		# Drop it only then, otherwise the planes shift and the channels are interleaved wrongly.
+		if image.shape[0] % nchannels == 1:
+			image = image[1:]
+		shape = image.shape
 		nzs = (shape[0] // nchannels) * nchannels
 		image = image[:nzs].reshape([shape[0] // nchannels, nchannels, shape[-2], shape[-1]])
 		image = image.swapaxes(0, 1)
+	else:
+		image = image[1:]
 
 	if image.dtype == np.uint8:
 		image = image.astype(np.uint16) ** 2

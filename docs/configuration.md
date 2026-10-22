@@ -60,4 +60,6 @@ This section is generated from the code (`mermake.config`).
 - `patch_size` is **not** the size of your images. It is the edge of the square patches each z-stack is cut into for deconvolution, and it sets the GPU memory use.
 - With a pickled dict of several PSFs (sampled on a grid over the field of view), set `patch_size` to the spacing of that grid so every patch gets the PSF measured near it.
 - `patch_overlap` should be larger than the radius of the PSF. Raising it costs memory and time.
+- **`patch_size + 2 * patch_overlap` should be a product of 2, 3, 5 and 7.** The FFT of the deconvolution is several times slower for a size with a larger prime factor. The default, 500 + 2 x 110 = 720, is fine. It was 89 up to version 0.1.0 (678 = 2 x 3 x 113, which is slow). Going back to 89 moves about 0.4 % of the spots, those at the threshold. To reproduce the results of version 0.1.0, set `patch_overlap = 89` and `real_fft = false` in `[hybs]` and `[dapi]`. If you change `patch_size`, change `patch_overlap` with it. See [where the time goes](scaling.md).
+- `real_fft` (default `true`) uses real-to-complex FFTs in the deconvolution, which take half the time and memory and give the same result up to rounding. Set it to `false` for complex FFTs.
 - `threshold` is the setting to adjust when you find too many or too few maxima.

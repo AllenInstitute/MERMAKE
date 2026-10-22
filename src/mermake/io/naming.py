@@ -44,6 +44,46 @@ def get_iset(file_path):
 	# Recurse up
 	return get_iset(path.parent)
 
+def shard_keys(keys, index, count):
+	"""The ``index``-th of ``count`` disjoint shares of the ``(iset, ifov)`` keys.
+
+	The keys are sorted first, so every process gets the same answer whatever order its own
+	directory scan returned them in, and then every ``count``-th key is taken. The shares are
+	disjoint and together hold every key. A share is empty when there are fewer keys than
+	``count``. Shard on fields of view, never on rounds: the drift of a field of view needs all
+	of its rounds in one process.
+
+	Parameters
+	----------
+	keys : iterable of (int, int)
+	    ``(iset, ifov)`` pairs, the keys of :meth:`FolderFilter.get_matches`.
+	index, count : int
+	    Take share ``index`` (from 0) of ``count``.
+
+	Returns
+	-------
+	list of (int, int)
+	    The selected keys in sorted order.
+	"""
+	if count < 1 or not 0 <= index < count:
+		raise ValueError(f"shard {index}/{count}: the index must be in 0..{count - 1}")
+	return sorted(keys)[index::count]
+
+
+def shard_matches(matches, shard=None):
+	"""``matches`` of :meth:`FolderFilter.get_matches` restricted to a shard and sorted by key.
+
+	Parameters
+	----------
+	matches : dict
+	    ``{(iset, ifov): [path, ...]}``.
+	shard : (int, int), optional
+	    ``(index, count)`` as in :func:`shard_keys`. Default: keep everything, just sorted.
+	"""
+	index, count = shard or (0, 1)
+	return {key: matches[key] for key in shard_keys(matches, index, count)}
+
+
 class FolderFilter:
 	"""Select round folders and fields of view from a ``first:last`` range.
 

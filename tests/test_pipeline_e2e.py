@@ -171,3 +171,154 @@ def test_suggest_threshold(tmp_path):
 	assert proc.returncode == 0, proc.stderr[-2000:]
 	assert "channel 0" in proc.stdout and "channel dapi" in proc.stdout
 	assert "Suggested thresholds" in proc.stdout
+
+
+# ---- sharding, several workers and robust writes ------------------------------------------------
+
+def mermake(settings, *flags, timeout=600):
+	"""Run the ``mermake`` command and return the finished process."""
+	return subprocess.run([sys.executable, "-m", "mermake", *flags, str(settings)],
+	                      capture_output=True, text=True, timeout=timeout)
+
+
+def spot_rows(out):
+	"""All spots of an output folder as a table sorted so that the order of the maxima does not matter."""
+	from mermake.io import spots
+	import pyarrow as pa
+	table = spots.open_dataset(str(out)).to_table()
+	table = table.set_column(table.column_names.index("kind"), "kind", table.column("kind").cast(pa.string()))
+	keys = ["iset", "ifov", "ih", "icol", "kind", "z", "x", "y"]
+	return table.sort_by([(k, "ascending") for k in keys])
+
+
+def output_files(out):
+	"""Names of every result file below an output folder, relative to it."""
+	return sorted(str(p.relative_to(out)) for p in out.rglob("*") if p.is_file())
+
+
+@pytest.fixture(scope="module")
+def three_fovs(tmp_path_factory):
+	"""Three fovs, the data they are run on and the output of one plain process, the reference."""
+	root = tmp_path_factory.mktemp("shards")
+	for fov in range(3):
+		write_fov(root, fov)
+	write_psf_and_flats(root)
+	settings = write_settings(root, root / "out_ref")
+	proc = mermake(settings)
+	assert proc.returncode == 0, proc.stderr[-2000:]
+	return root, settings, root / "out_ref"
+
+
+def settings_for(root, out_name):
+	"""A copy of the settings that writes to ``out_name``."""
+	text = (root / "settings.toml").read_text().replace(str(root / "out_ref"), str(root / out_name))
+	path = root / f"{out_name}.toml"
+	path.write_text(text)
+	return path
+
+
+def test_reference_run_wrote_a_drift_file_per_fov(three_fovs):
+	_, _, ref = three_fovs
+	assert len(list(ref.glob("drift_*.pkl"))) == 3
+	assert not [f for f in output_files(ref) if ".tmp" in f]
+
+
+def test_shards_together_equal_one_run(three_fovs):
+	root, _, ref = three_fovs
+	settings = settings_for(root, "out_shards")
+	for shard in ("0/2", "1/2"):
+		proc = mermake(settings, "--shard", shard)
+		assert proc.returncode == 0, proc.stderr[-2000:]
+	out = root / "out_shards"
+	assert output_files(out) == output_files(ref)
+	assert spot_rows(out).equals(spot_rows(ref))
+
+
+def test_a_shard_only_does_its_own_fovs(three_fovs):
+	root, _, ref = three_fovs
+	settings = settings_for(root, "out_one_shard")
+	proc = mermake(settings, "--shard", "1/2")
+	assert proc.returncode == 0, proc.stderr[-2000:]
+	assert "shard 1/2: 1 of 3 fov groups" in proc.stdout
+	names = output_files(root / "out_one_shard")
+	assert any("Conv_zscan__001" in n for n in names)
+	assert not any("Conv_zscan__000" in n or "Conv_zscan__002" in n for n in names)
+	assert len(list((root / "out_one_shard").glob("drift_*.pkl"))) == 1
+
+
+def test_a_shard_without_images_exits(three_fovs):
+	"""The reader used to die before it could say it was done, so the run never ended."""
+	root, _, _ = three_fovs
+	settings = settings_for(root, "out_empty_shard")
+	proc = mermake(settings, "--shard", "4/5", timeout=120)
+	assert proc.returncode == 0, proc.stderr[-2000:]
+	assert "No images to process" in proc.stdout
+	assert not [f for f in output_files(root / "out_empty_shard") if f.endswith((".npz", ".pkl"))]
+
+
+def test_workers_on_one_gpu(three_fovs):
+	"""``--gpus 0,0`` starts two workers on the same GPU, standing in for two GPUs."""
+	root, _, ref = three_fovs
+	settings = settings_for(root, "out_workers")
+	proc = mermake(settings, "--gpus", "0,0")
+	assert proc.returncode == 0, proc.stderr[-2000:]
+	out = root / "out_workers"
+	assert output_files(out) == output_files(ref)
+	assert spot_rows(out).equals(spot_rows(ref))
+
+
+def test_a_failing_worker_fails_the_run(three_fovs):
+	root, _, _ = three_fovs
+	settings = settings_for(root, "out_failing")
+	text = settings.read_text().replace("psf.npy", "no_such_psf.npy")
+	bad = root / "bad_psf.toml"
+	bad.write_text(text)
+	proc = mermake(bad, "--gpus", "0,0")
+	assert proc.returncode != 0
+
+
+def test_finished_results_are_not_computed_again(three_fovs):
+	root, _, ref = three_fovs
+	settings = settings_for(root, "out_resume")
+	assert mermake(settings, "--shard", "0/3").returncode == 0
+	before = {p: p.stat().st_mtime_ns for p in (root / "out_resume").rglob("*") if p.is_file()}
+	assert mermake(settings, "--shard", "0/3").returncode == 0
+	after = {p: p.stat().st_mtime_ns for p in (root / "out_resume").rglob("*") if p.is_file()}
+	assert before == after
+
+
+class TestAtomicWrites:
+	def test_drift_save_leaves_no_partial_file(self, tmp_path):
+		from mermake.align import drift_save
+		path = tmp_path / "drift_000.pkl"
+		drift_save([1, 2, 3], str(path))
+		assert path.exists() and [p.name for p in tmp_path.iterdir()] == ["drift_000.pkl"]
+		bad = tmp_path / "drift_001.pkl"
+		with pytest.raises(Exception):
+			drift_save(lambda: None, str(bad))  # cannot be pickled, and fails after the file was opened
+		assert not bad.exists()
+		assert [p.name for p in tmp_path.iterdir()] == ["drift_000.pkl"]
+
+	def test_save_xfits_leaves_no_partial_file(self, tmp_path, monkeypatch):
+		import cupy as cp
+		from types import SimpleNamespace
+		from mermake.io.queue import ImageQueue
+
+		queue = ImageQueue.__new__(ImageQueue)
+		queue.output_folder = str(tmp_path)
+		queue.args_array = []
+		queue.hyb_save = "{fov}--{tag}--col{icol}__Xhfits.npz"
+		queue.dapi_save = "{fov}--{tag}--dapiFeatures.npz"
+		image = SimpleNamespace(path=str(tmp_path / "H1_TEST_set1" / "Conv_zscan__000.zarr"),
+		                        col0=cp.ones((4, 8), dtype=cp.float32), col1=cp.ones((4, 8), dtype=cp.float32))
+		name = "Conv_zscan__000--H1_TEST_set1--col0__Xhfits.npz"
+		queue.save_xfits(image, 0)
+		assert [p.name for p in tmp_path.iterdir()] == [name]
+
+		def die_halfway(file, **arrays):
+			file.write(b"half a file")
+			raise OSError("disk full")
+		monkeypatch.setattr(cp, "savez_compressed", die_halfway)
+		with pytest.raises(OSError, match="disk full"):
+			queue.save_xfits(image, 1)
+		assert [p.name for p in tmp_path.iterdir()] == [name]

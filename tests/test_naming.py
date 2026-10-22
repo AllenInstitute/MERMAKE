@@ -1,7 +1,7 @@
 """CPU-only tests for filename parsing and FolderFilter."""
 import pytest
 
-from mermake.io.naming import FolderFilter, get_ifov, get_ih, get_iset
+from mermake.io.naming import FolderFilter, get_ifov, get_ih, get_iset, shard_keys, shard_matches
 
 REGEX = r"""([A-z]+)(\d+)_(.+)_set(\d+)(.*)"""
 
@@ -128,3 +128,39 @@ class TestGetMatches:
 	def test_no_matches(self, tree):
 		ff = FolderFilter("H20_*_set1:H30_*_set1", REGEX, float("-inf"), float("inf"))
 		assert ff.get_matches([str(tree)]) == {}
+
+
+class TestShardKeys:
+	KEYS = [(1, 5), (1, 0), (2, 3), (1, 2), (2, 1), (1, 9), (1, 7)]
+
+	def test_disjoint_and_complete(self):
+		shards = [shard_keys(self.KEYS, i, 3) for i in range(3)]
+		flat = [k for shard in shards for k in shard]
+		assert sorted(flat) == sorted(self.KEYS)
+		assert len(flat) == len(set(flat))
+
+	def test_does_not_depend_on_the_input_order(self):
+		a = shard_keys(self.KEYS, 1, 3)
+		assert shard_keys(reversed(self.KEYS), 1, 3) == a
+		assert shard_keys(set(self.KEYS), 1, 3) == a
+
+	def test_every_nth_of_the_sorted_keys(self):
+		# sorted: (1,0) (1,2) (1,5) (1,7) (1,9) (2,1) (2,3)
+		assert shard_keys(self.KEYS, 0, 3) == [(1, 0), (1, 7), (2, 3)]
+		assert shard_keys(self.KEYS, 1, 3) == [(1, 2), (1, 9)]
+		assert shard_keys(self.KEYS, 2, 3) == [(1, 5), (2, 1)]
+		assert shard_keys(self.KEYS, 0, 1) == sorted(self.KEYS)
+
+	def test_more_shards_than_keys(self):
+		assert shard_keys([(1, 0), (1, 1)], 2, 5) == []
+		assert shard_keys([], 0, 2) == []
+
+	@pytest.mark.parametrize("index, count", [(3, 3), (-1, 3), (0, 0), (1, 1)])
+	def test_bad_shard(self, index, count):
+		with pytest.raises(ValueError, match="index"):
+			shard_keys(self.KEYS, index, count)
+
+	def test_matches_are_restricted_and_sorted(self):
+		matches = {(1, 3): ["c"], (1, 1): ["a1", "a2"], (1, 2): ["b"]}
+		assert list(shard_matches(matches)) == [(1, 1), (1, 2), (1, 3)]
+		assert shard_matches(matches, (1, 2)) == {(1, 2): ["b"]}

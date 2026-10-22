@@ -127,6 +127,8 @@ def main(argv=None):
 	instrument(stats, mermake.gpu.blur, "box_1d", "box blur")
 	instrument(stats, cp.fft, "fftn", "fftn")
 	instrument(stats, cp.fft, "ifftn", "ifftn")
+	instrument(stats, cp.fft, "rfftn", "rfftn")
+	instrument(stats, cp.fft, "irfftn", "irfftn")
 	instrument(stats, pl, "find_local_maxima", "maxima (patch)",
 	           label=lambda image, *a, **k: "maxima (whole image, dapi)"
 	           if image.shape[1] * image.shape[2] > 700 * 700 else "maxima (patch)")
@@ -137,6 +139,7 @@ def main(argv=None):
 	sampler = None
 	with ImageQueue(args, prefetch_count=args.prefetch) as queue:
 		ncol, *chan_shape = queue.shape
+		queue_image_gib = np.prod(queue.shape) * np.dtype(queue.dtype).itemsize / 1024**3
 		print(f"image {tuple(queue.shape)} {queue.dtype}, {queue.n_images} images, "
 		      f"device {cp.cuda.runtime.getDeviceProperties(0)['name'].decode()}")
 		buffer = cp.empty(chan_shape, dtype=cp.float32)
@@ -202,7 +205,10 @@ def main(argv=None):
 	print(f"  {'':28s}{'calls':>7s}{'host ms':>10s}{'gpu ms':>10s}")
 	for name in sorted(stats.calls, key=lambda k: -stats.host[k]):
 		print(f"  {name:28s}{stats.calls[name] / n:7.0f}{1000 * stats.host[name] / n:10.0f}{stats.gpu[name] / n:10.0f}")
-	print(f"\npeak GPU memory in use over the counted images: {peak:.2f} GiB of {sampler.total / 1024**3:.1f} GiB "
+	import resource
+	print(f"\npeak host memory of this process (resident): {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024**2:.1f} GiB, "
+	      f"with {args.prefetch} images read ahead of {queue_image_gib:.2f} GiB each")
+	print(f"peak GPU memory in use over the counted images: {peak:.2f} GiB of {sampler.total / 1024**3:.1f} GiB "
 	      f"(includes the CUDA context, about 0.3 GiB)")
 	return 0
 

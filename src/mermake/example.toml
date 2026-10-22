@@ -29,3 +29,14 @@ fov_range = '0:1'
 #
 #[dapi]
 #patch_size = 300
+
+# To get the results of version 0.1.0 or earlier back, set the following. The defaults are now
+# patch_overlap = 110 (it was 89) and real_fft = true, which make a run about twice as fast and
+# move about 0.4 % of the spots, those at the threshold. `mermake --print-config` says why:
+#[hybs]
+#patch_overlap = 89
+#real_fft = false
+#
+#[dapi]
+#patch_overlap = 89
+#real_fft = false

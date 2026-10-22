@@ -105,11 +105,22 @@ class Params:
 	patch_overlap: int = _f(
 		"Extra context added on each side of a patch (also zero-padded onto the PSF). Maxima "
 		"within this margin of an interior patch edge are dropped, because the neighboring patch "
-		"covers them. Should be larger than the PSF radius.", unit="pixels")
+		"covers them. Should be larger than the PSF radius. Keep `patch_size + 2*patch_overlap` a "
+		"product of 2, 3, 5 and 7 (the default 500 + 2 x 110 = 720 is): the FFT is several times "
+		"slower for a size with a larger prime factor. The default was 89 up to version 0.1.0 "
+		"(678 = 2 x 3 x 113, a slow size). Set 89 and `real_fft = false` to get the old results "
+		"back: the new default moves about 0.4 % of the spots, those within about 1 % of the "
+		"threshold.", unit="pixels")
 	beta: float = _f(
 		"Regularization weight of the Laplacian term in the deconvolution filter "
 		"conj(H) / (|H|^2 + beta*|L|^2). Larger values give a smoother result with less "
 		"ringing but weaker deconvolution.")
+	real_fft: bool = _f(
+		"Use real-to-complex FFTs in the deconvolution. The image and the PSF are real, so the "
+		"result is the same up to rounding (18 of 3.2 million spots changed on a test field of "
+		"view, all of them at the threshold), in about 60 % of the time and with half the GPU "
+		"memory for the PSF spectrum and the FFT buffer. `false` uses complex FFTs, as versions "
+		"up to 0.1.0 did.")
 	threshold: Union[float, List[float]] = _f(
 		"A voxel is only a candidate maximum if it is brighter than this after deconvolution. "
 		"[hybs]: image intensity, either one number for all color channels or a list with one "
@@ -151,10 +162,21 @@ class Output:
 		default="parquet")
 
 
+# Defaults of [hybs] and [dapi].
+#
+# NOTE patch_overlap is 110. Up to version 0.1.0 it was 89. The deconvolution FFT runs on patches
+# of (patch_size + 2*patch_overlap) pixels, and cuFFT is fast only for sizes whose prime factors
+# are 2, 3, 5 and 7: 500 + 2*89 = 678 = 2*3*113 was slow, 500 + 2*110 = 720 = 2^4*3^2*5 is not,
+# and the FFT is 2.1 times faster. The margin is wider than before, but any change of the
+# patch size moves about 0.4 % of the spots, those within about 1 % of the threshold, by up to 1 %
+# in h (tested on 3.2 million spots of one field of view with 86, 93 and 110). To reproduce results
+# of version 0.1.0 or earlier set patch_overlap = 89 (and real_fft = false for the same FFTs) in
+# [hybs] and [dapi]. If you change patch_size, pick patch_overlap so that
+# patch_size + 2*patch_overlap is again a product of 2, 3, 5 and 7.
 DEFAULTS = {
-	"hybs": dict(patch_size=500, patch_overlap=89, beta=0.0001, threshold=3600, blur_radius=30,
+	"hybs": dict(patch_size=500, patch_overlap=110, beta=0.0001, real_fft=True, threshold=3600, blur_radius=30,
 	             delta=1, delta_fit=3, sigmaZ=1, sigmaXY=1.5),
-	"dapi": dict(patch_size=500, patch_overlap=89, beta=0.01, threshold=3.0, blur_radius=50,
+	"dapi": dict(patch_size=500, patch_overlap=110, beta=0.01, real_fft=True, threshold=3.0, blur_radius=50,
 	             delta=5, delta_fit=5, sigmaZ=1, sigmaXY=1.5),
 }
 
@@ -279,7 +301,7 @@ def _type_name(tp):
 		return " or ".join(_type_name(a) for a in typing.get_args(tp) if a is not type(None))
 	if typing.get_origin(tp) in (list, List):
 		return f"list of {_type_name(typing.get_args(tp)[0])}s"
-	return {int: "integer", float: "number", str: "string"}[tp]
+	return {bool: "true or false", int: "integer", float: "number", str: "string"}[tp]
 
 
 def _toml_value(value):
@@ -287,6 +309,8 @@ def _toml_value(value):
 		if "'" not in value and "\n" not in value:
 			return f"'{value}'"
 		return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+	if isinstance(value, bool):
+		return "true" if value else "false"
 	if isinstance(value, list):
 		return "[" + ", ".join(_toml_value(v) for v in value) + "]"
 	return repr(value)
@@ -319,6 +343,10 @@ def _coerce(value, tp):
 			return [_coerce(v, item) for v in value]
 		except TypeError:
 			raise TypeError(f"a list of {_type_name(item)}s") from None
+	if tp is bool:
+		if not isinstance(value, bool):
+			raise TypeError("true or false")
+		return value
 	if tp is int:
 		if isinstance(value, bool) or not isinstance(value, int):
 			raise TypeError("an integer")

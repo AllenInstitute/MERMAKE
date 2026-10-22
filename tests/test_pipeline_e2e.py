@@ -322,3 +322,33 @@ class TestAtomicWrites:
 		with pytest.raises(OSError, match="disk full"):
 			queue.save_xfits(image, 1)
 		assert [p.name for p in tmp_path.iterdir()] == [name]
+
+
+def test_real_fft_off_gives_the_same_spots(tmp_path):
+	"""``real_fft = false`` uses complex FFTs, which must find the same spots as the real ones."""
+	write_fov(tmp_path)
+	write_psf_and_flats(tmp_path)
+	settings = write_settings(tmp_path, tmp_path / "out_real")
+	assert "real_fft =" not in settings.read_text()  # the default is true
+	complex_settings = tmp_path / "complex.toml"
+	complex_settings.write_text(settings.read_text().replace(str(tmp_path / "out_real"), str(tmp_path / "out_complex"))
+	                            .replace("[hybs]", "[hybs]\nreal_fft = false").replace("[dapi]", "[dapi]\nreal_fft = false"))
+	for path in (settings, complex_settings):
+		proc = mermake(path)
+		assert proc.returncode == 0, proc.stderr[-2000:]
+	from scipy.spatial import cKDTree
+	real, other = spot_rows(tmp_path / "out_real"), spot_rows(tmp_path / "out_complex")
+	assert real.num_rows == other.num_rows > 5
+	# match the spots by position: rounding makes the order of equal-looking rows differ
+	for kind in ("hyb", "dapi_plus", "dapi_minus"):
+		import pyarrow.compute as pc
+		pick = {name: t.filter(pc.equal(t.column("kind").cast("string"), kind)) for name, t in (("a", real), ("b", other))}
+		a, b = pick["a"], pick["b"]
+		assert a.num_rows == b.num_rows
+		for icol in sorted(set(a.column("icol").to_pylist())):
+			ia, ib = [np.flatnonzero(t.column("icol").to_numpy() == icol) for t in (a, b)]
+			xyz = lambda t, i: np.column_stack([t.column(c).to_numpy()[i] for c in ("ih", "z", "x", "y")])  # noqa: E731
+			distance, match = cKDTree(xyz(b, ib)).query(xyz(a, ia))
+			assert distance.max() < 1e-3
+			assert len(set(match)) == len(ia)  # one to one
+			np.testing.assert_allclose(a.column("h").to_numpy()[ia], b.column("h").to_numpy()[ib][match], rtol=1e-3)

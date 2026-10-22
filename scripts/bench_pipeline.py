@@ -131,7 +131,7 @@ def main(argv=None):
 	instrument(stats, cp.fft, "irfftn", "irfftn")
 	instrument(stats, pl, "find_local_maxima", "maxima (patch)",
 	           label=lambda image, *a, **k: "maxima (whole image, dapi)"
-	           if image.shape[1] * image.shape[2] > 700 * 700 else "maxima (patch)")
+	           if image.shape[1] * image.shape[2] > 1500 * 1500 else "maxima (patch)")
 	instrument(stats, pl, "drift", "drift")
 
 	pl.build_config(args)

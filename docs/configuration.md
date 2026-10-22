@@ -28,6 +28,7 @@ Only `[paths]` is required, and only five of its keys have no default. Everythin
 | `mermake --print-config settings.toml` | print every setting with its description and the value that will be used, defaults filled in |
 | `mermake --dry-run settings.toml` | validate, and list the images that would be processed |
 | `mermake --suggest-threshold settings.toml` | sample a few images and suggest values for `threshold` (needs a GPU, see below) |
+| `mermake --dry-run --shard 1/4 settings.toml` | the same for one share of the fields of view (see [several GPUs and nodes](scaling.md)) |
 
 ### Choosing `threshold`
 
@@ -36,6 +37,17 @@ Only `[paths]` is required, and only five of its keys have no default. Everythin
 `[hybs] threshold` is either one number for all color channels or a list with one number per color channel (all channels but the last, which is dapi), for example `threshold = [18810, 9051, 8180]`. When every channel has a suggestion, `--suggest-threshold` prints that list ready to paste. `[dapi] threshold` is always one number. The estimate is rough because deconvolution ringing is not symmetric in sign. The lowest threshold tried for the color channels is 4 robust standard deviations above the median, so a suggestion marked as the lowest tried may be too high.
 
 None of them needs a GPU.
+
+## Running
+
+| Option | What it does |
+|---|---|
+| `-g N`, `--gpu N` | use GPU `N`, counted among the visible ones. Without it the environment is left alone and the first visible GPU is used, so a scheduler's `CUDA_VISIBLE_DEVICES` is respected |
+| `--gpus all` or `--gpus 0,1,2` | run one worker per GPU on this machine, each on its own share of the fields of view |
+| `--shard I/N` | process share `I` (from 0) of `N` of the fields of view, every round of a field of view together |
+| `--prefetch N` | images read ahead of the GPU (default 5). Each is held in memory whole, so this sets most of the RAM use |
+
+See [several GPUs and nodes](scaling.md).
 
 ## Reference
 

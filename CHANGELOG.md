@@ -16,8 +16,16 @@ All notable changes to MERMAKE. The format follows [Keep a Changelog](https://ke
 - `[paths] sum_channels = [i, j]` sums two channels into one when an image is read, for acquisitions where one color was imaged twice to double its exposure. 8-bit data is squared before the sum, and the sum is clipped at 65535.
 - `[paths] dapi_channel` gives the index of the dapi channel (default `-1`, the last one) for acquisitions where dapi is stored first. The remaining channels are the hyb colors in stored order, and the flat fields follow the image channels.
 
+- `mermake --shard I/N` processes one share of the fields of view, with all the rounds of a field of view in the same share, and `mermake --gpus all` (or `--gpus 0,1,2`) runs one worker per GPU of the machine on its own share. See [several GPUs and nodes](docs/scaling.md).
+- `--prefetch N` sets how many images are read ahead (default 5), the main setting for the RAM use.
+- `scripts/run_slurm_parallel.sbatch` (a job array, one shard and GPU per task, or several GPUs per task) and `scripts/run_slurm_report.sbatch`.
+
 ### Changed
 
+- `--gpu` no longer defaults to 0 and no longer overwrites `CUDA_VISIBLE_DEVICES` when it is not given, so the GPU a scheduler assigned is used. `--gpu N` counts among the visible devices.
+- Images are processed in sorted (set, field of view) order, instead of the order of the directory listing.
+- `.npz` and drift files are written under a temporary name and renamed when complete, so a killed run leaves no truncated result. Errors while saving now stop the run instead of being lost.
+- A run with no images to process (for example an empty shard) exits instead of waiting forever, and the drift of the last field of view is done when the images are over.
 - **The default output format is now `parquet`.** Set `[output] format = "npz"` (or `"both"`) to get the `.npz` files. A run resumes from whichever selected format it finds.
 
 ## [0.1.0] - 2026-10-14

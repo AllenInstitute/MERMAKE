@@ -3,3 +3,5 @@
 ::: mermake.config
 
 ::: mermake.cli
+
+::: mermake.launch

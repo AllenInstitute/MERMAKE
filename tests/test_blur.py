@@ -118,3 +118,19 @@ def test_box_invalid_inputs():
 	with pytest.raises(ValueError):
 		blur.box(arr, (3, 3), axes=(0, 1, 2))  # mismatch size/axes
 
+
+
+def test_box_1d_refuses_overlapping_buffers():
+	arr = cp.arange(4 * 6 * 6, dtype=cp.float32).reshape(4, 6, 6)
+	with pytest.raises(ValueError, match="In-place"):
+		blur.box_1d(arr, 3, axis=1, out=arr)
+	with pytest.raises(ValueError, match="In-place"):
+		blur.box_1d(arr[:, :, :4], 3, axis=1, out=arr[:, :, 2:])  # share the middle columns
+
+
+def test_box_1d_allows_interleaved_buffers_that_share_no_element():
+	# the memory ranges overlap but no element is shared, so there is no race
+	base = cp.arange(4 * 6 * 8, dtype=cp.float32).reshape(4, 6, 8)
+	image, out = base[:, :, ::2], base[:, :, 1::2]
+	assert cp.may_share_memory(image, out) and not cp.shares_memory(image, out)
+	blur.box_1d(image, 3, axis=1, out=out)

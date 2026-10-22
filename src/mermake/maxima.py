@@ -9,6 +9,8 @@ local_maxima_count_kernel = cp.RawKernel(kernel_code, "local_maxima_count")
 local_maxima_kernel = cp.RawKernel(kernel_code, "local_maxima")
 #delta_fit_kernel = cp.RawKernel(kernel_code, "delta_fit")
 delta_fit_cross_corr_kernel = cp.RawKernel(kernel_code, "delta_fit_cross_corr")
+# the same kernel reading a uint16 raw image directly
+delta_fit_cross_corr_u16_kernel = cp.RawKernel(kernel_code, "delta_fit_cross_corr", options=("-DRAW_T=unsigned short",))
 
 def find_local_maxima(image, threshold=None, delta=1, delta_fit=0, raw=None, sigmaZ=1, sigmaXY=1.5, **kwargs):
 	"""Find local intensity maxima in a 3D image and refine them to sub-voxel positions.
@@ -32,7 +34,8 @@ def find_local_maxima(image, threshold=None, delta=1, delta_fit=0, raw=None, sig
 		With 0 the position stays at the integer voxel and the scores are NaN.
 	raw : cupy.ndarray
 		(z, y, x) raw image with the same shape as ``image``, used for the scores ``a`` and
-		``habs``. Required when any maximum is found.
+		``habs``. Required when any maximum is found. float32 and uint16 are read as they are,
+		anything else is converted to float32 first.
 	sigmaZ, sigmaXY : float
 		Width in voxels, in z and in xy, of the Gaussian template of the scores ``a`` and ``hn``.
 		They do not change the position.
@@ -87,10 +90,10 @@ def find_local_maxima(image, threshold=None, delta=1, delta_fit=0, raw=None, sig
 	if num == 0:
 		return cp.zeros((0, 8), dtype=cp.float32)
 	
-	# Allocate output arrays
-	z_out = cp.zeros(total_voxels, dtype=cp.uint16)
-	x_out = cp.zeros_like(z_out)
-	y_out = cp.zeros_like(z_out)
+	# Allocate output arrays, as large as the maxima that were counted. Every entry is written.
+	z_out = cp.empty(num, dtype=cp.uint16)
+	x_out = cp.empty_like(z_out)
+	y_out = cp.empty_like(z_out)
 	count[:] = 0  # reset counter
 	
 	# Call the kernel to find local maxima and store coordinates
@@ -114,22 +117,21 @@ def find_local_maxima(image, threshold=None, delta=1, delta_fit=0, raw=None, sig
 	# Allocate output array for refined coordinates
 	output = cp.zeros((num_found, 8), dtype=cp.float32)
 
-	# always cast the uint16 raw to float32
-	if raw.dtype != cp.float32:
+	# the kernel reads float32 or uint16 raw as it is, so a whole uint16 image is not copied
+	fit_kernel = delta_fit_cross_corr_kernel
+	if raw.dtype == cp.uint16:
+		fit_kernel = delta_fit_cross_corr_u16_kernel
+	elif raw.dtype != cp.float32:
 		raw = raw.astype(cp.float32)
 
 	# Call delta fit kernel
 	blocks = (num_found + threads - 1) // threads
-	delta_fit_cross_corr_kernel((blocks,), (threads,), 
+	fit_kernel((blocks,), (threads,), 
 		(image.ravel(), raw.ravel(), z_out, x_out, y_out, output, 
 		 num_found, depth, height, width, delta_fit, sigmaZ, sigmaXY))
 	
 	#cp.cuda.runtime.deviceSynchronize()
 	stream.synchronize()
-	# Clean up
-	del z_out, x_out, y_out
-	cp._default_memory_pool.free_all_blocks()
-	
 	return output
 
 if __name__ == "__main__":

@@ -343,3 +343,88 @@ class TestRepeatFunction:
 
 if __name__ == "__main__":
 	pytest.main([__file__, "-v"])
+
+
+# ---- the slice implementation of reflect against the kernel it replaced ---------------------------
+# The kernel visited every element of the array to decide whether it was on the reflected side.
+# The slices only touch the elements that change. Both must give the same array.
+
+MIRROR_SOURCE = r'''
+extern "C" __global__
+void mirror(float* arr, const int ndim, const long long* shape,
+			const long long* strides, const int axis, const int i, const int mode) {
+	long idx = blockDim.x * blockIdx.x + threadIdx.x;
+	long size = 1;
+	for (int d=0; d<ndim; d++) size *= shape[d];
+	if (idx >= size) return;
+	// Convert flat idx -> multi-index
+	long coords[16];  // supports up to 16D
+	long tmp = idx;
+	for (int d=ndim-1; d>=0; d--) {
+		coords[d] = tmp % shape[d];
+		tmp /= shape[d];
+	}
+	int j = coords[axis];
+	int n = shape[axis];
+	int dist = j - i;
+	if (mode == 0 && dist > 0) {  // "out": reflect right/down
+		int mirror_j = i - dist;
+		if (mirror_j >= 0) {
+			coords[axis] = mirror_j;
+		} else {
+			return;
+		}
+	} else if (mode == 1 && dist < 0) {  // "in": reflect left/up
+		int mirror_j = i - dist;
+		if (mirror_j < n) {
+			coords[axis] = mirror_j;
+		} else {
+			return;
+		}
+	} else {
+		return;
+	}
+	long offset_src = 0;
+	for (int d=0; d<ndim; d++) offset_src += coords[d]*strides[d];
+	long offset_dst = 0;
+	tmp = idx;
+	for (int d=ndim-1; d>=0; d--) {
+		int c = tmp % shape[d];
+		tmp /= shape[d];
+		offset_dst += c*strides[d];
+	}
+	arr[offset_dst/sizeof(float)] = arr[offset_src/sizeof(float)];
+}
+'''
+reference_kernel = cp.RawKernel(MIRROR_SOURCE, "mirror")
+
+
+def reference_reflect(arr, i, axis, mode):
+	result = arr.copy()
+	shape = cp.array(result.shape, dtype=cp.int64)
+	strides = cp.array(result.strides, dtype=cp.int64)
+	blocks = (result.size + 255) // 256
+	reference_kernel((blocks,), (256,), (result, result.ndim, shape.data.ptr, strides.data.ptr, axis, i,
+	                                      0 if mode == "out" else 1))
+	return result
+
+
+@pytest.mark.parametrize("shape", [(1,), (2,), (7,), (5, 6), (4, 1, 6), (3, 4, 5, 6)])
+@pytest.mark.parametrize("mode", ["out", "in"])
+def test_reflect_is_identical_to_the_kernel_it_replaced(shape, mode):
+	arr = cp.random.default_rng(2).uniform(-5, 5, shape).astype(cp.float32)
+	for axis in range(arr.ndim):
+		for i in range(shape[axis]):
+			got = reflect(arr, i, axis=axis, mode=mode)
+			assert cp.array_equal(got, reference_reflect(arr, i, axis, mode)), (shape, axis, i, mode)
+
+
+def test_reflect_in_place_on_a_view_and_negative_arguments():
+	arr = cp.random.default_rng(3).uniform(-5, 5, (6, 7, 8)).astype(cp.float32)
+	got = arr.copy()
+	view = got[1:5, :, 2:]
+	reflect(view, 1, axis=0, mode="out", out=view)  # a non-contiguous view, changed in place
+	want = arr.copy()
+	want[1:5, :, 2:] = reference_reflect(arr[1:5, :, 2:], 1, 0, "out")
+	assert cp.array_equal(got, want)
+	assert cp.array_equal(reflect(arr, -2, axis=-1, mode="in"), reference_reflect(arr, 6, 2, "in"))

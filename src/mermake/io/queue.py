@@ -9,7 +9,7 @@ from itertools import chain
 import cupy as cp
 from .. import __version__
 from .readers import read_im, Container, color_indices, dapi_index
-from .naming import get_ih, get_ifov, get_iset, FolderFilter
+from .naming import get_ih, get_ifov, get_iset, FolderFilter, shard_matches
 from ..config import namespace_to_array
 from . import spots
 
@@ -57,9 +57,10 @@ class ImageQueue:
 	----------
 	args : argparse.Namespace
 	    Needs ``settings`` (a :class:`~mermake.config.Config`) and ``paths`` (its ``[paths]``
-	    section).
+	    section). If it has ``shard``, a pair ``(index, count)``, only that share of the fields
+	    of view is read (see :func:`~mermake.io.naming.shard_keys`).
 	prefetch_count : int
-	    How many images to read ahead.
+	    How many images to read ahead. Each is held in memory whole.
 
 	Attributes
 	----------
@@ -67,6 +68,9 @@ class ImageQueue:
 	    ``(channels, z, y, x)`` of the first image. All images are assumed to match.
 	summary : str
 	    Table of how many images were found per set and round.
+	n_images : int
+	    Number of images this queue will deliver. The images are in sorted ``(set, fov)`` order with
+	    the rounds of a field of view together.
 	"""
 	__version__ = __version__
 	def __init__(self, args, prefetch_count=5):
@@ -84,7 +88,13 @@ class ImageQueue:
 		filtered = FolderFilter(self.hyb_range, self.regex, fov_min, fov_max)
 		matches = filtered.get_matches(self.hyb_folders)
 
-		self.summary = filtered.summary(matches)
+		# an empty share still needs the shape of the images, so peek at the unsharded matches
+		shard = getattr(args, 'shard', None)
+		selected = shard_matches(matches, shard)
+		self.n_images = sum(len(paths) for paths in selected.values())
+		self.summary = filtered.summary(selected)
+		if shard:
+			self.summary = f"shard {shard[0]}/{shard[1]}: {len(selected)} of {len(matches)} fov groups\n" + self.summary
 
 		# Peek at first image to set shape/dtype
 		first_image = None
@@ -100,8 +110,8 @@ class ImageQueue:
 		self.dtype = first_image.dtype
 	
 		ordered = []
-		for key in matches:
-			ordered.extend(self.hsorted(matches[key]))
+		for key in selected:
+			ordered.extend(self.hsorted(selected[key]))
 
 		self.files = iter(ordered)
 
@@ -157,23 +167,20 @@ class ImageQueue:
 		return container
 
 	def _worker(self):
-		"""Continuously read images and put them in the queue."""
-		for path in self.files:
-			if self.stop_event.is_set():
-				break
-			try:
-				container = self.containerize(path)
-				self.queue.put(container)
-			except Exception as e:
-				print(f"Warning: failed to read {path}: {e}")
-				#dummy = lambda : None
-				#dummy.path = path
-				#self.queue.put(dummy)
-				#self.queue.put(False)
-				continue
-		# Signal no more images
-		container.last = True
-		self.queue.put(None)
+		"""Continuously read images and put them in the queue, then ``None`` to say there are no more."""
+		try:
+			for path in self.files:
+				if self.stop_event.is_set():
+					break
+				try:
+					container = self.containerize(path)
+					self.queue.put(container)
+				except Exception as e:
+					print(f"Warning: failed to read {path}: {e}")
+					continue
+		finally:
+			# always, or the pipeline waits forever (an empty share has no image at all)
+			self.queue.put(None)
 
 	def __iter__(self):
 		return self
@@ -341,12 +348,21 @@ class ImageQueue:
 			Xh = getattr(image, f'col{icol}')
 			data = {'Xh': Xh}
 		
-		# save if file doesn't exist
+		# save if file doesn't exist. The file only gets its name once it is complete, because a
+		# run killed halfway (the time limit of a batch job) would leave a truncated file that the
+		# next run takes for a finished result.
 		path = image.path
 		filename = self.get_name(path, icol)
 		filepath = os.path.join(self.output_folder, filename)
 		if not os.path.exists(filepath):
-			cp.savez_compressed(filepath, version=__version__, args=self.args_array, **data)
+			tmp = f"{filepath}.tmp{os.getpid()}"
+			try:
+				with open(tmp, 'wb') as f:  # a file object, so numpy does not add '.npz' to the name
+					cp.savez_compressed(f, version=__version__, args=self.args_array, **data)
+				os.replace(tmp, filepath)
+			finally:
+				if os.path.exists(tmp):
+					os.remove(tmp)
 			#  Optional integrity check after saving
 			# this seems to greatly slow everything down
 			#try:

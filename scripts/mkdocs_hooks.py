@@ -14,6 +14,8 @@ def _cell(text):
 
 
 def _value(value):
+	if isinstance(value, bool):
+		value = str(value).lower()
 	return "" if value is None else f"`{value}`"
 
 

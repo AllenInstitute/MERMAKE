@@ -1,9 +1,11 @@
 """Command line interface for mermake."""
 import os
+import re
 import sys
 import argparse
 from importlib import resources
 
+from . import launch
 from .config import Config, ConfigError
 
 
@@ -34,13 +36,43 @@ class CustomArgumentParser(argparse.ArgumentParser):
 		super().error(message)
 
 
+def parse_shard(text):
+	"""Argparse type: ``I/N`` becomes ``(I, N)``, the share ``I`` (from 0) of ``N`` shares."""
+	m = re.fullmatch(r"(\d+)/(\d+)", text.strip())
+	if not m or not 0 <= int(m.group(1)) < int(m.group(2)):
+		raise argparse.ArgumentTypeError(f"{text!r} is not I/N with 0 <= I < N, for example 0/4")
+	return int(m.group(1)), int(m.group(2))
+
+
+def positive_int(text):
+	"""Argparse type: an integer of at least 1."""
+	try:
+		value = int(text)
+	except ValueError:
+		value = 0
+	if value < 1:
+		raise argparse.ArgumentTypeError(f"{text!r} is not a whole number of at least 1")
+	return value
+
+
 def build_parser(prog=None):
 	"""Build the argument parser."""
 	prog = prog or (sys.argv[0] if sys.argv[0] else "mermake")
 	usage = f'{prog} [-opt1, [-opt2, ...]] settings.toml'
 	parser = CustomArgumentParser(description='', formatter_class=argparse.RawTextHelpFormatter, usage=usage)
 	parser.add_argument('settings', type=is_valid_file, nargs='?', help='settings file')
-	parser.add_argument('-g', '--gpu', type=int, default=0, help="The gpu to use [0]")
+	parser.add_argument('-g', '--gpu', type=int, default=None,
+		help="The gpu to use, counted among the visible ones. By default the environment is left "
+		     "alone, so a scheduler's choice (CUDA_VISIBLE_DEVICES) is kept and the first visible gpu is used")
+	parser.add_argument('--gpus', default=None, metavar='LIST',
+		help="Run one worker per gpu on this machine: 'all' or comma separated gpu numbers, for example 0,1,2,3. "
+		     "Each worker takes its own share of the fields of view")
+	parser.add_argument('--shard', type=parse_shard, default=None, metavar='I/N',
+		help="Process only share I (from 0) of N of the fields of view. Run one process per share, for "
+		     "example one per gpu or one per SLURM array task. Every round of a field of view stays together")
+	parser.add_argument('--prefetch', type=positive_int, default=5, metavar='N',
+		help="Images read ahead of the gpu [5]. Each one takes the memory of a whole image (about 2.3 GiB "
+		     "for 4 channels of 40 x 2800 x 2800), and a run holds a few more than this")
 	parser.add_argument('-c', '--check', action="store_true", help="Check a single zarr")
 	parser.add_argument('--print-example', action="store_true",
 		help="Print a minimal example settings file and exit")
@@ -59,15 +91,19 @@ def build_parser(prog=None):
 	return parser
 
 
-def dry_run(config):
+def dry_run(config, shard=None):
 	"""Print what a run would process. Needs no GPU."""
-	from .io.naming import FolderFilter
+	from .io.naming import FolderFilter, shard_matches
 	paths = config.paths
 	fov_min, fov_max = (-float('inf'), float('inf'))
 	if paths.fov_range:
 		fov_min, fov_max = map(float, paths.fov_range.split(':'))
 	folder_filter = FolderFilter(paths.hyb_range, paths.regex, fov_min, fov_max)
 	matches = folder_filter.get_matches(paths.hyb_folders)
+	total = len(matches)
+	matches = shard_matches(matches, shard)
+	if shard:
+		print(f"shard {shard[0]}/{shard[1]}: {len(matches)} of {total} fov groups")
 	print(folder_filter.summary(matches))
 	print(f"{sum(map(len, matches.values()))} images in {len(matches)} (set, fov) groups")
 	print(f"output folder: {paths.output_folder}")
@@ -75,6 +111,7 @@ def dry_run(config):
 
 def main(argv=None):
 	"""Entry point for the ``mermake`` command."""
+	argv = sys.argv[1:] if argv is None else list(argv)
 	parser = build_parser()
 	args = parser.parse_args(argv)
 
@@ -87,11 +124,24 @@ def main(argv=None):
 		print(args.settings.to_toml())
 		return
 	if args.dry_run:
-		dry_run(args.settings)
+		dry_run(args.settings, args.shard)
 		return
 
+	if args.gpus is not None:
+		if args.gpu is not None:
+			parser.error("--gpus and --gpu cannot be combined")
+		try:
+			devices = launch.parse_gpus(args.gpus)
+		except ValueError as e:
+			parser.error(str(e))
+		return launch.run_workers(launch.worker_jobs(argv, devices, shard=args.shard))
+
 	# set this before cupy is imported to make sure to capture the correct gpu
-	os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
+	if args.gpu is not None:
+		try:
+			os.environ["CUDA_VISIBLE_DEVICES"] = launch.resolve_device(args.gpu)
+		except ValueError as e:
+			parser.error(str(e))
 	from mermake.gpu.runtime import check_cuda
 	check_cuda()
 	if args.suggest_threshold:

@@ -15,9 +15,24 @@ All notable changes to MERMAKE. The format follows [Keep a Changelog](https://ke
 - Images are read from the `.zarr` entry itself when that is a zarr array, which is how current acquisition software writes them. The older `<fov>/data` layout is still read.
 - `[paths] sum_channels = [i, j]` sums two channels into one when an image is read, for acquisitions where one color was imaged twice to double its exposure. 8-bit data is squared before the sum, and the sum is clipped at 65535.
 - `[paths] dapi_channel` gives the index of the dapi channel (default `-1`, the last one) for acquisitions where dapi is stored first. The remaining channels are the hyb colors in stored order, and the flat fields follow the image channels.
+- `mermake --shard I/N` processes one share of the fields of view, with all the rounds of a field of view in the same share, and `mermake --gpus all` (or `--gpus 0,1,2`) runs one worker per GPU of the machine on its own share. See [several GPUs and nodes](docs/scaling.md).
+- `--prefetch N` sets how many images are read ahead (default 5), the main setting for the RAM use.
+- `scripts/run_slurm_parallel.sbatch` (a job array, one shard and GPU per task, or several GPUs per task) and `scripts/run_slurm_report.sbatch`.
+- `scripts/bench_pipeline.py`, `scripts/bench_patch.py` and `scripts/bench_read.py` to find where the time and the GPU memory go and how fast the input can be read.
+- `[hybs] real_fft` and `[dapi] real_fft` (default `true`) select real-to-complex FFTs in the deconvolution. They take half the time and half the memory of the PSF spectrum and the FFT buffer and give the same result up to rounding. `false` uses complex FFTs as before.
+
+### Changed (affects results)
+
+- **`patch_overlap` now defaults to 110 in `[hybs]` and `[dapi]`. It was 89.** The FFT of the deconvolution is several times slower for a padded patch size with a large prime factor: `patch_size + 2 * patch_overlap` was 678 = 2 x 3 x 113 and is now 720 = 2^4 x 3^2 x 5. A run takes about half the time (87 s instead of 185 s for the nine rounds of a field of view on a T4, with `real_fft`). The spots change a little: on a field of view of 3.2 million spots, 0.4 % of them (those within about 1 % of the threshold) were found in only one of the two versions, and `h` of the others changed by 1 % or less for 99 % of them. **To reproduce the results of 0.1.0, set `patch_overlap = 89` and `real_fft = false` in `[hybs]` and `[dapi]`**: that gave exactly the same spots and diagnostics as before this change. If you change `patch_size`, choose `patch_overlap` so that their combination is again a product of 2, 3, 5 and 7.
+- **`real_fft` is on by default.** 18 of 3.2 million spots changed against complex FFTs, all at the threshold.
 
 ### Changed
 
+- **Faster, with identical results:** 26.4 s to 18.8 s per image on a T4 (40 planes of 2800 x 2800, 4 channels), and 8.1 s with the new defaults above. `box_1d` no longer runs an exact overlap test of its buffers on every call (about 20 ms of host time with the GPU idle), `reflect` copies the slices it changes instead of visiting the whole stack, and `find_local_maxima` sizes its outputs by the number of maxima, reads a uint16 image directly and no longer flushes the GPU memory pool after every call. The peak GPU memory fell from 9.2 to 7.0 GiB. See [where the time goes](docs/scaling.md).
+- `--gpu` no longer defaults to 0 and no longer overwrites `CUDA_VISIBLE_DEVICES` when it is not given, so the GPU a scheduler assigned is used. `--gpu N` counts among the visible devices.
+- Images are processed in sorted (set, field of view) order, instead of the order of the directory listing.
+- `.npz` and drift files are written under a temporary name and renamed when complete, so a killed run leaves no truncated result. Errors while saving now stop the run instead of being lost.
+- A run with no images to process (for example an empty shard) exits instead of waiting forever, and the drift of the last field of view is done when the images are over.
 - **The default output format is now `parquet`.** Set `[output] format = "npz"` (or `"both"`) to get the `.npz` files. A run resumes from whichever selected format it finds.
 
 ## [0.1.0] - 2026-10-14

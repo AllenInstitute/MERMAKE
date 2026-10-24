@@ -152,11 +152,15 @@ void local_maxima(const float* image, float threshold, int delta, int delta_fit,
 
 
 #define MAX_KERNEL_POINTS 600
+// type of the raw image: float by default, or unsigned short to read a uint16 image as it is
+// (every uint16 value is exact in float, so the result is the same without a float copy)
+#ifndef RAW_T
+#define RAW_T float
+#endif
 extern "C" __global__
 void delta_fit_cross_corr(
 	const float* __restrict__ image,
-	const float* __restrict__ raw,
-	//const unsigned short* __restrict__ raw,
+	const RAW_T* __restrict__ raw,
 	unsigned short* __restrict__ z_out,   // (num_maxima)
 	unsigned short* __restrict__ x_out,   // (num_maxima)
 	unsigned short* __restrict__ y_out,   // (num_maxima)

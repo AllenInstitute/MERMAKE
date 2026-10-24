@@ -28,6 +28,7 @@ Only `[paths]` is required, and only five of its keys have no default. Everythin
 | `mermake --print-config settings.toml` | print every setting with its description and the value that will be used, defaults filled in |
 | `mermake --dry-run settings.toml` | validate, and list the images that would be processed |
 | `mermake --suggest-threshold settings.toml` | sample a few images and suggest values for `threshold` (needs a GPU, see below) |
+| `mermake --dry-run --shard 1/4 settings.toml` | the same for one share of the fields of view (see [several GPUs and nodes](scaling.md)) |
 
 ### Choosing `threshold`
 
@@ -36,6 +37,17 @@ Only `[paths]` is required, and only five of its keys have no default. Everythin
 `[hybs] threshold` is either one number for all color channels or a list with one number per color channel (all channels but the last, which is dapi), for example `threshold = [18810, 9051, 8180]`. When every channel has a suggestion, `--suggest-threshold` prints that list ready to paste. `[dapi] threshold` is always one number. The estimate is rough because deconvolution ringing is not symmetric in sign. The lowest threshold tried for the color channels is 4 robust standard deviations above the median, so a suggestion marked as the lowest tried may be too high.
 
 None of them needs a GPU.
+
+## Running
+
+| Option | What it does |
+|---|---|
+| `-g N`, `--gpu N` | use GPU `N`, counted among the visible ones. Without it the environment is left alone and the first visible GPU is used, so a scheduler's `CUDA_VISIBLE_DEVICES` is respected |
+| `--gpus all` or `--gpus 0,1,2` | run one worker per GPU on this machine, each on its own share of the fields of view |
+| `--shard I/N` | process share `I` (from 0) of `N` of the fields of view, every round of a field of view together |
+| `--prefetch N` | images read ahead of the GPU (default 5). Each is held in memory whole, so this sets most of the RAM use |
+
+See [several GPUs and nodes](scaling.md).
 
 ## Reference
 
@@ -48,4 +60,6 @@ This section is generated from the code (`mermake.config`).
 - `patch_size` is **not** the size of your images. It is the edge of the square patches each z-stack is cut into for deconvolution, and it sets the GPU memory use.
 - With a pickled dict of several PSFs (sampled on a grid over the field of view), set `patch_size` to the spacing of that grid so every patch gets the PSF measured near it.
 - `patch_overlap` should be larger than the radius of the PSF. Raising it costs memory and time.
+- **`patch_size + 2 * patch_overlap` should be a product of 2, 3, 5 and 7.** The FFT of the deconvolution is several times slower for a size with a larger prime factor. The default, 500 + 2 x 110 = 720, is fine. It was 89 up to version 0.1.0 (678 = 2 x 3 x 113, which is slow). Going back to 89 moves about 0.4 % of the spots, those at the threshold. To reproduce the results of version 0.1.0, set `patch_overlap = 89` and `real_fft = false` in `[hybs]` and `[dapi]`. If you change `patch_size`, change `patch_overlap` with it. See [where the time goes](scaling.md).
+- `real_fft` (default `true`) uses real-to-complex FFTs in the deconvolution, which take half the time and memory and give the same result up to rounding. Set it to `false` for complex FFTs.
 - `threshold` is the setting to adjust when you find too many or too few maxima.

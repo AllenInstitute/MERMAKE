@@ -244,11 +244,17 @@ class DualAligner:
 		return tzxyf, tzxy_plus, tzxy_minus, N_plus, N_minus
 
 def drift_save(data, filepath):
-	"""Pickle ``data`` to ``filepath``.
+	"""Pickle ``data`` to ``filepath``, which only exists once it is complete.
 	"""
 	# maybe put this inside io.py for consistency
-	with open(filepath, 'wb') as f:
-		pickle.dump(data, f)
+	tmp = f"{filepath}.tmp{os.getpid()}"
+	try:
+		with open(tmp, 'wb') as f:
+			pickle.dump(data, f)
+		os.replace(tmp, filepath)
+	finally:
+		if os.path.exists(tmp):
+			os.remove(tmp)
 
 def drift(block):
 	"""Compute the drift of every image of a field of view relative to its middle round.

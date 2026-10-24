@@ -27,6 +27,7 @@ nav:
   - Pipeline overview: pipeline.md
   - Configuration: configuration.md
   - Input and output formats: io-formats.md
+  - Several GPUs and nodes: scaling.md
   - API reference:
       - Settings and CLI: api/settings.md
       - Processing: api/processing.md

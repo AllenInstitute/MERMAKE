@@ -559,3 +559,69 @@ class TestPositionPreserved:
 		                     patch_overlap=8, beta=0.0001)
 		out = deconv.apply(image)
 		assert np.unravel_index(int(cp.argmax(out)), out.shape) == spot
+
+
+class TestRealFft:
+	"""``real_fft`` only changes how the FFTs are done: the patches and the PSF are real."""
+
+	@staticmethod
+	def psf():
+		zz, yy, xx = np.meshgrid(np.arange(-3, 3), np.arange(-5, 5), np.arange(-5, 5), indexing="ij")
+		psf = np.exp(-(zz**2 / 2.0 + (yy**2 + xx**2) / (2 * 1.5**2))).astype(np.float32)
+		return psf / psf.sum()
+
+	@staticmethod
+	def image(depth, ny, nx, seed=0):
+		rng = np.random.default_rng(seed)
+		image = rng.uniform(100, 140, (depth, ny, nx)).astype(np.float32)
+		for _ in range(12):
+			z, y, x = rng.integers(2, depth - 2), rng.integers(3, ny - 3), rng.integers(3, nx - 3)
+			image[z, y, x] += 3000
+		return cp.asarray(image)
+
+	def test_is_the_default(self):
+		assert Deconvolver(self.psf(), (6, 40, 40), patch_size=24, zpad=5, patch_overlap=8).real_fft is True
+
+	def test_the_buffers_hold_half_of_the_spectrum(self):
+		args = dict(psfs=self.psf(), channel_shape=(6, 40, 40), patch_size=24, zpad=5, patch_overlap=8)
+		real, full = Deconvolver(real_fft=True, **args), Deconvolver(real_fft=False, **args)
+		n = 24 + 2 * 8
+		assert real.psf_fft.shape == (1, 6 + 2 * 5, n, n // 2 + 1)
+		assert full.psf_fft.shape == (1, 6 + 2 * 5, n, n)
+		assert real.patch_fft.shape == (6 + 2 * 5, n, n // 2 + 1) and full.patch_fft.shape == (6 + 2 * 5, n, n)
+		assert real.psf_fft.nbytes + real.patch_fft.nbytes < 0.6 * (full.psf_fft.nbytes + full.patch_fft.nbytes)
+
+	def test_the_spectrum_is_the_half_of_the_complex_one(self):
+		args = dict(psfs=self.psf(), channel_shape=(6, 40, 40), patch_size=24, zpad=5, patch_overlap=8, beta=0.001)
+		real, full = Deconvolver(real_fft=True, **args), Deconvolver(real_fft=False, **args)
+		half = full.psf_fft[..., :real.psf_fft.shape[-1]]
+		assert float(cp.max(cp.abs(real.psf_fft - half))) < 1e-5 * float(cp.max(cp.abs(half)))
+
+	# every parity of the padded sizes: xy is patch_size + 2 * patch_overlap, z is depth + 2 * zpad
+	@pytest.mark.parametrize("depth", [7, 8])
+	@pytest.mark.parametrize("patch_size", [24, 25])
+	@pytest.mark.parametrize("patch_overlap", [8, 9])
+	def test_same_result_as_complex_fft(self, depth, patch_size, patch_overlap):
+		image = self.image(depth, 70, 63)  # not a multiple of the patch size: edge patches of other sizes
+		out = {}
+		for real_fft in (True, False):
+			deconv = Deconvolver(self.psf(), image.shape, patch_size=patch_size, zpad=depth - 1,
+			                     patch_overlap=patch_overlap, beta=0.0001, real_fft=real_fft)
+			out[real_fft] = deconv.apply(image, flat_field=cp.full(image.shape[1:], 1.1, dtype=cp.float32), blur_radius=7)
+		scale = float(cp.max(cp.abs(out[False])))
+		assert scale > 100
+		assert float(cp.max(cp.abs(out[True] - out[False]))) < 2e-4 * scale
+
+	def test_same_result_with_one_psf_per_patch(self):
+		psfs = {"a": self.psf(), "b": self.psf() * 0.9, "c": np.roll(self.psf(), 1, axis=2), "d": self.psf()}
+		image = self.image(8, 50, 50)
+		out = [Deconvolver(psfs, image.shape, patch_size=25, zpad=7, patch_overlap=8, beta=0.001,
+		                   real_fft=real_fft).apply(image) for real_fft in (True, False)]
+		assert float(cp.max(cp.abs(out[0] - out[1]))) < 2e-4 * float(cp.max(cp.abs(out[1])))
+
+	def test_patch_wise_yields_the_same_raw_patch(self):
+		image = self.image(6, 40, 40)
+		args = dict(psfs=self.psf(), channel_shape=image.shape, patch_size=24, zpad=5, patch_overlap=8)
+		for (x, y, a, raw_a), (_, _, b, raw_b) in zip(Deconvolver(real_fft=True, **args).patch_wise(image),
+		                                                Deconvolver(real_fft=False, **args).patch_wise(image)):
+			assert a.shape == b.shape and cp.array_equal(raw_a, raw_b)

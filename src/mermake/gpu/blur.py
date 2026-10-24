@@ -175,8 +175,10 @@ def box_1d(image, size, axis=0, out=None):
 		out = cp.empty_like(image)
 	assert out.dtype == cp.float32, "Output must be float32"
 
-	# Prevent in-place operations that cause race conditions
-	if cp.shares_memory(image, out):
+	# Prevent in-place operations that cause race conditions. The exact test takes about 20 ms of
+	# host time (with the GPU idle) for an array of a patch, so only ask it when the memory
+	# ranges overlap at all, which is never the case for separate buffers.
+	if cp.may_share_memory(image, out) and cp.shares_memory(image, out):
 		raise ValueError("In-place operation not supported - input and output must be different")
 
 	if axis < 0:

@@ -41,4 +41,4 @@ Saving happens in a thread pool, in parallel with the next image.
 
 ## Resuming
 
-Every result file is written only if it does not exist, and existing files are loaded instead of recomputed. A run that was interrupted continues where it stopped, and a finished run does nothing. To recompute something, delete its file.
+Every result file is written only if it does not exist, and existing files are loaded instead of recomputed. A file gets its name only when it is complete, so a run that was killed halfway leaves no truncated result. A run that was interrupted continues where it stopped, and a finished run does nothing. To recompute something, delete its file.

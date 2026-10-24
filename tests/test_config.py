@@ -93,6 +93,18 @@ class TestDefaults:
 		cfg = load(hybs={"sigmaZ": 2})
 		assert isinstance(cfg.hybs.sigmaZ, float) and isinstance(cfg.dapi.sigmaZ, float)
 
+	def test_fft_defaults(self):
+		cfg = load()
+		# 500 + 2 * 110 = 720 = 2^4 * 3^2 * 5, a size the FFT is fast for (it was 89, 678 = 2 * 3 * 113)
+		assert cfg.hybs.patch_overlap == cfg.dapi.patch_overlap == 110
+		assert (cfg.hybs.patch_size + 2 * cfg.hybs.patch_overlap) == 720
+		assert cfg.hybs.real_fft is True and cfg.dapi.real_fft is True
+
+	def test_old_fft_settings_can_be_restored(self):
+		cfg = load(hybs={"patch_overlap": 89, "real_fft": False}, dapi={"real_fft": False})
+		assert cfg.hybs.patch_overlap == 89 and cfg.hybs.real_fft is False
+		assert cfg.dapi.patch_overlap == 110 and cfg.dapi.real_fft is False
+
 	def test_vars_gives_kwargs_for_gpu_functions(self):
 		assert set(vars(load().hybs)) == {f.name for f in fields(Params)}
 
@@ -122,6 +134,10 @@ class TestValidation:
 		assert "patch_size must be an integer" in self.error(hybs={"patch_size": "big"})
 		assert "patch_size must be an integer" in self.error(hybs={"patch_size": 1.5})
 		assert "hyb_folders must be a list of strings" in self.error(paths=dict(REQUIRED, hyb_folders="exp"))
+
+	@pytest.mark.parametrize("value", [1, 0, "true", "no", 1.0, [True]])
+	def test_real_fft_must_be_true_or_false(self, value):
+		assert "real_fft must be true or false" in self.error(hybs={"real_fft": value})
 
 	def test_threshold_list_errors(self):
 		assert "threshold must be one number" in self.error(dapi={"threshold": [1.0, 2.0]})
@@ -187,6 +203,12 @@ class TestRoundTrip:
 		again = Config.from_dict(tomllib.loads(cfg.to_toml()), check_files=False)
 		assert again == cfg
 
+	def test_booleans_are_written_as_toml(self):
+		cfg = load(hybs={"real_fft": False})
+		text = cfg.to_toml()
+		assert "real_fft = false" in text and "real_fft = true" in text  # [hybs] and [dapi]
+		assert Config.from_dict(tomllib.loads(text), check_files=False) == cfg
+
 	def test_default_regex_survives(self):
 		again = Config.from_dict(tomllib.loads(load().to_toml()), check_files=False)
 		assert again.paths.regex == load().paths.regex == r'([A-z]+)(\d+)_(.+)_set(\d+)(.*)'
@@ -207,6 +229,17 @@ class TestDocs:
 		assert ("paths", "psf_file") in keys and ("dapi", "sigmaXY") in keys
 		required = {r["key"] for r in reference_rows() if r["required"] and r["section"] == "paths"}
 		assert required == {"psf_file", "flat_field_tag", "hyb_folders", "hyb_range", "output_folder"}
+
+	def test_patch_overlap_documents_the_change_of_its_default(self):
+		# the description is what --print-config and the configuration page show
+		doc = next(f.metadata["doc"] for f in fields(Params) if f.name == "patch_overlap")
+		assert "89" in doc and "110" in doc and "0.1.0" in doc
+		assert "89" in load().to_toml()
+
+	def test_real_fft_is_listed_with_its_defaults(self):
+		rows = {(r["section"], r["key"]): r for r in reference_rows()}
+		assert rows[("hybs", "real_fft")]["default"] is True and rows[("dapi", "real_fft")]["type"] == "true or false"
+		assert rows[("hybs", "patch_overlap")]["default"] == rows[("dapi", "patch_overlap")]["default"] == 110
 
 	def test_packaged_example_is_valid(self):
 		cfg = Config.from_dict(tomllib.loads(cli.example_text()), check_files=False)

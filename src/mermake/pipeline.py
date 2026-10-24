@@ -18,6 +18,35 @@ from .maxima import find_local_maxima
 _last_len = 0
 
 
+class Saver:
+	"""A thread pool for saving results while the next image is processed.
+
+	A failed save raises in the main thread, at the next ``submit`` or at ``finish``, instead of
+	being lost with the future that nobody looks at.
+	"""
+	def __init__(self, max_workers=9):
+		self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+		self.futures = []
+
+	def submit(self, fn, *args):
+		"""Run ``fn(*args)`` in the pool. Raises the error of an earlier save that failed."""
+		pending = []
+		for future in self.futures:
+			if future.done():
+				future.result()
+			else:
+				pending.append(future)
+		pending.append(self.pool.submit(fn, *args))
+		self.futures = pending
+
+	def finish(self):
+		"""Wait for every save and raise the first error."""
+		self.pool.shutdown(wait=True)
+		for future in self.futures:
+			future.result()
+		self.futures = []
+
+
 def print_clean(msg):
 	"""Overwrite the current terminal line with ``msg``."""
 	global _last_len
@@ -137,17 +166,20 @@ def process_hyb_channel(image, icol, queue, ctx):
 	ctx.executor.submit(queue.save_results, image, icol, {KIND_HYB: stats})
 
 
-def finish_block(image, ctx):
-	"""Close out a block of images for a fov: do the drift, then start a new block."""
-	block = ctx.block
-	if not block.add(image) or hasattr(image, 'last'):
-		# do the drift
-		if result := drift(block):
-			ctx.executor.submit(drift_save, *result)
-			del result
-		# do the decoding
-		# here eventually
+def drift_block(block, ctx):
+	"""Do the drift of a complete block of images of a fov and start saving it."""
+	if result := drift(block):
+		ctx.executor.submit(drift_save, *result)
+		del result
+	# do the decoding
+	# here eventually
 
+
+def finish_block(image, ctx):
+	"""Add ``image`` to the block of its fov. If it belongs to the next fov, close out the block first."""
+	block = ctx.block
+	if not block.add(image):
+		drift_block(block, ctx)
 		# now add the image to the newly cleared block
 		block.clear()
 		block.add(image)
@@ -170,12 +202,15 @@ def run(args):
 	psfs = np.load(args.paths.psf_file, allow_pickle=True)
 
 	# the save file executor to do the saving in parallel with computations
-	executor = concurrent.futures.ThreadPoolExecutor(max_workers=9)
+	executor = Saver(max_workers=9)
 
 	print_clean('Finding input image files.')
 
-	with ImageQueue(args) as queue:
+	with ImageQueue(args, prefetch_count=getattr(args, 'prefetch', 5)) as queue:
 		print_clean(queue.summary)
+		if queue.n_images == 0:
+			print('\nNo images to process.', flush=True)
+			return
 		# set some things based on input images
 		ncol, *chan_shape = queue.shape
 		threshold = args.hybs.threshold
@@ -207,4 +242,7 @@ def run(args):
 		for image in queue:
 			process_image(image, queue, ctx)
 			del image
-		executor.shutdown(wait=True)
+		# the images are over, so the block of the last fov is complete too
+		if ctx.block:
+			drift_block(ctx.block, ctx)
+		executor.finish()

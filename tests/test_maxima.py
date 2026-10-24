@@ -325,3 +325,40 @@ def test_delta_fit_above_kernel_limit_is_rejected():
 	image = cp.zeros((10, 10, 10), dtype=cp.float32)
 	with pytest.raises(ValueError, match="delta_fit"):
 		find_local_maxima(image, threshold=0.5, delta=1, delta_fit=6, raw=image)
+
+
+class TestRawAndOutputSize:
+	def test_uint16_raw_gives_the_same_result_as_float32_raw(self):
+		rng = cp.random.default_rng(5)
+		image = rng.standard_normal((12, 40, 44), dtype=cp.float32) * 1000
+		raw = rng.integers(0, 60000, (12, 40, 44), dtype=cp.uint16)
+		for kwargs in (dict(delta=1, delta_fit=3), dict(delta=3, delta_fit=5)):
+			a = find_local_maxima(image, threshold=800, raw=raw, **kwargs)
+			b = find_local_maxima(image, threshold=800, raw=raw.astype(cp.float32), **kwargs)
+			assert a.shape[0] > 50
+			# the order of the maxima depends on the threads, the content does not
+			a, b = cp.asnumpy(a), cp.asnumpy(b)
+			a, b = (m[np.lexsort((m[:, 2], m[:, 1], m[:, 0]))] for m in (a, b))
+			np.testing.assert_array_equal(a, b)
+
+	def test_every_maximum_is_returned(self):
+		"""The outputs are sized by the count of maxima, so none may be lost or invented."""
+		rng = np.random.default_rng(7)
+		image = rng.standard_normal((10, 31, 37)).astype(np.float32)
+		threshold = -0.5  # most of the voxels are candidates, so there are many maxima
+		# a maximum is at least as large as its six neighbors, reflected at the borders
+		padded = np.pad(image, 1, mode="reflect")
+		core = padded[1:-1, 1:-1, 1:-1]
+		is_max = core > threshold
+		for axis in range(3):
+			for step in (-1, 1):
+				neighbor = np.roll(padded, step, axis=axis)[1:-1, 1:-1, 1:-1]
+				is_max &= ~(core < neighbor)
+		expected = {tuple(p) for p in np.argwhere(is_max)}
+		assert len(expected) > 100
+
+		result = cp.asnumpy(find_local_maxima(cp.asarray(image), threshold=threshold, delta=1, delta_fit=0,
+		                                      raw=cp.asarray(image)))
+		found = {tuple(int(v) for v in row[:3]) for row in result}
+		assert len(result) == len(found) == len(expected)
+		assert found == expected

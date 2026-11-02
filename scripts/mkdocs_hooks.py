@@ -38,8 +38,17 @@ def render():
 	        "| Key | Type | Default | Description |", "|---|---|---|---|"]
 	for r in (r for r in rows if r["section"] == "output"):
 		out.append(f"| `{r['key']}` | {r['type']} | {_value(r['default'])} | {_cell(r['doc'])} |")
+	out += ["", "### `[run]`", "",
+	        "| Key | Type | Unit | Default | Description |", "|---|---|---|---|---|"]
+	for r in (r for r in rows if r["section"] == "run"):
+		out.append(f"| `{r['key']}` | {r['type']} | {r['unit'] or ''} | {_value(r['default']) or 'not set'} | "
+		           f"{_cell(r['doc'])} |")
 	return "\n".join(out)
 
 
-def on_page_markdown(markdown, **kwargs):
+def on_page_markdown(markdown, page, **kwargs):
+	# docs/changelog.md includes the root CHANGELOG.md, whose links are written relative to the
+	# repository root so that they work on GitHub. Make them relative to docs/ for the site.
+	if page.file.src_path == "changelog.md":
+		markdown = markdown.replace("](docs/", "](")
 	return markdown.replace(MARKER, render())

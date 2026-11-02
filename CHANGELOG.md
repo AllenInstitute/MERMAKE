@@ -20,6 +20,7 @@ All notable changes to MERMAKE. The format follows [Keep a Changelog](https://ke
 - `scripts/run_slurm_parallel.sbatch` (a job array, one shard and GPU per task, or several GPUs per task) and `scripts/run_slurm_report.sbatch`.
 - `scripts/bench_pipeline.py`, `scripts/bench_patch.py` and `scripts/bench_read.py` to find where the time and the GPU memory go and how fast the input can be read.
 - `[hybs] real_fft` and `[dapi] real_fft` (default `true`) select real-to-complex FFTs in the deconvolution. They take half the time and half the memory of the PSF spectrum and the FFT buffer and give the same result up to rounding. `false` uses complex FFTs as before.
+- `mermake-report` streams the spots in two passes (a sample for the bin edges, then the counts per round), so its memory no longer grows with the number of spots. The bin edges now come from a sample, so the curves can differ very slightly from before.
 
 ### Changed (affects results)
 
@@ -30,6 +31,7 @@ All notable changes to MERMAKE. The format follows [Keep a Changelog](https://ke
 
 - **Faster, with identical results:** 26.4 s to 18.8 s per image on a T4 (40 planes of 2800 x 2800, 4 channels), and 8.1 s with the new defaults above. `box_1d` no longer runs an exact overlap test of its buffers on every call (about 20 ms of host time with the GPU idle), `reflect` copies the slices it changes instead of visiting the whole stack, and `find_local_maxima` sizes its outputs by the number of maxima, reads a uint16 image directly and no longer flushes the GPU memory pool after every call. The peak GPU memory fell from 9.2 to 7.0 GiB. See [where the time goes](docs/scaling.md).
 - `--gpu` no longer defaults to 0 and no longer overwrites `CUDA_VISIBLE_DEVICES` when it is not given, so the GPU a scheduler assigned is used. `--gpu N` counts among the visible devices.
+- **The leading plane of an image is no longer always dropped.** With an XML file, `read_im` drops the first plane only when the plane count is one more than a multiple of the number of channels (old acquisitions wrote one extra leading frame, for example 201 planes for 5 channels x 40 z). Before, it was always dropped, which shifted the planes and mixed up the channels for data without the extra frame. Without an XML file the first plane is still always dropped. Results change for acquisitions that have no extra frame.
 - Images are processed in sorted (set, field of view) order, instead of the order of the directory listing.
 - `.npz` and drift files are written under a temporary name and renamed when complete, so a killed run leaves no truncated result. Errors while saving now stop the run instead of being lost.
 - A run with no images to process (for example an empty shard) exits instead of waiting forever, and the drift of the last field of view is done when the images are over.

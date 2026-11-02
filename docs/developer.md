@@ -46,7 +46,9 @@ To compare against a previous version, run both on `tests/examples/single` and c
 
 ## Adding a setting
 
-Add a field to `Paths` or `Params` in `config.py` with a `doc` (and a `unit` for numbers). Give `Params` fields defaults in `DEFAULTS` for both `hybs` and `dapi`. A test fails if a field has no description. The configuration reference, `--print-config` and the validation pick it up automatically.
+Add a field to `Paths`, `Params`, `Output` or `Run` in `config.py` with a `doc` (and a `unit` for numbers). Give `Params` fields defaults in `DEFAULTS` for both `hybs` and `dapi`. A test fails if a field has no description. The configuration reference, `--print-config` and the validation pick it up automatically.
+
+A `Run` field is a default for a command line option of the same name. Keep the order the command line first, the settings file second, the default last: give the option no default of its own (`None`) and fill it in from `settings.run` in `cli.main`, as `prefetch` is.
 
 ## Adding a kernel
 

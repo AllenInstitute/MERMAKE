@@ -2,8 +2,9 @@
 
 One mermake process drives one GPU. To use several GPUs of a machine, run one process per GPU,
 each on its own share of the fields of view (``--shard``). ``mermake --gpus 0,1,2,3 settings.toml``
-does that. Under SLURM or any other scheduler that sets ``CUDA_VISIBLE_DEVICES``, device numbers
-count among the devices the job can see.
+does that, and so does ``gpus = [0, 1, 2, 3]`` under ``[run]`` in the settings file, for a job that
+cannot take a command line. Under SLURM or any other scheduler that sets ``CUDA_VISIBLE_DEVICES``,
+device numbers count among the devices the job can see.
 
 This module must not import cupy: ``CUDA_VISIBLE_DEVICES`` has to be set before cupy is imported.
 """
@@ -103,6 +104,10 @@ def worker_jobs(argv, devices, shard=None, environ=None, cpus=None):
 	of ``count * len(devices)`` shares of the fields of view, where ``shard = (index, count)`` is the
 	share of the whole run that this machine has (for example one SLURM array task per node).
 
+	Each worker is started with ``--gpu 0``, the one device it can see. It reads the same settings
+	file as the launcher, and ``--gpu`` is what keeps it from starting workers of its own when that
+	file has ``[run] gpus``.
+
 	Parameters
 	----------
 	argv : list of str
@@ -131,7 +136,7 @@ def worker_jobs(argv, devices, shard=None, environ=None, cpus=None):
 	base = strip_option(strip_option(argv, "--gpus"), "--shard")
 	jobs = []
 	for k, device in enumerate(devices):
-		cmd = [sys.executable, "-m", "mermake", *base, "--shard", f"{index * n + k}/{count * n}"]
+		cmd = [sys.executable, "-m", "mermake", *base, "--shard", f"{index * n + k}/{count * n}", "--gpu", "0"]
 		jobs.append((cmd, {**environ, "CUDA_VISIBLE_DEVICES": device}))
 	return jobs
 

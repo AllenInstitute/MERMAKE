@@ -103,7 +103,7 @@ def main(argv=None):
 	parser.add_argument("settings", help="settings TOML, with an output folder that holds no results")
 	parser.add_argument("--images", type=int, default=9, help="images to run, all rounds of the first fov by default [9]")
 	parser.add_argument("--skip", type=int, default=1, help="leading images that are run but not counted [1]")
-	parser.add_argument("--prefetch", type=int, default=5)
+	parser.add_argument("--prefetch", type=int, default=None, help="images read ahead [[run] prefetch of the settings, 5]")
 	parser.add_argument("--gpu", type=int, default=None)
 	args = parser.parse_args(argv)
 
@@ -111,6 +111,8 @@ def main(argv=None):
 		os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
 	from mermake.cli import is_valid_file
 	args.settings = is_valid_file(args.settings)
+	if args.prefetch is None:
+		args.prefetch = args.settings.run.prefetch
 	args.shard = None
 
 	import cupy as cp

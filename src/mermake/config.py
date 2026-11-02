@@ -162,6 +162,25 @@ class Output:
 		default="parquet")
 
 
+@dataclass(kw_only=True)
+class Run:
+	"""The ``[run]`` section: how a run uses the machine.
+
+	The command line options of the same names override these, so a settings file can say how to
+	run where there is no command line (a job that only starts ``mermake settings.toml``).
+	"""
+	gpus: Optional[Union[str, List[int]]] = _f(
+		"Run one worker per GPU of this machine, each on its own share of the fields of view. `all` is "
+		"every visible GPU. Otherwise give the GPU numbers as text (`'0,1,2'`) or as a list (`[0, 1, 2]`), "
+		"counted among the visible ones. A number can be repeated, which runs several workers on one GPU. "
+		"Not set: one process on the first visible GPU. The options `--gpus` and `--gpu` of the command "
+		"line override it.", default=None)
+	prefetch: int = _f(
+		"Images each worker reads ahead of the GPU. Each is held in memory whole (about 2.3 GiB for 4 "
+		"channels of 40 x 2800 x 2800) and a worker holds a few more than this, so it sets most of the "
+		"RAM use. The option `--prefetch` of the command line overrides it.", unit="images", default=5)
+
+
 # Defaults of [hybs] and [dapi].
 #
 # NOTE patch_overlap is 110. Up to version 0.1.0 it was 89. The deconvolution FFT runs on patches
@@ -180,7 +199,7 @@ DEFAULTS = {
 	             delta=5, delta_fit=5, sigmaZ=1, sigmaXY=1.5),
 }
 
-SECTIONS = {"paths": Paths, "hybs": Params, "dapi": Params, "output": Output}
+SECTIONS = {"paths": Paths, "hybs": Params, "dapi": Params, "output": Output, "run": Run}
 
 # keys that used to exist, with what to tell the user
 RETIRED = {
@@ -198,6 +217,7 @@ class Config:
 	hybs: Params
 	dapi: Params
 	output: Output
+	run: Run
 
 	@classmethod
 	def from_file(cls, path, **kwargs):
@@ -252,6 +272,8 @@ class Config:
 		if sections.get("output") is not None and sections["output"].format not in OUTPUT_FORMATS:
 			errors.append(f"[output] format must be one of {', '.join(OUTPUT_FORMATS)}, "
 			              f"got {sections['output'].format!r}")
+		if sections.get("run") is not None:
+			_check_run(sections["run"], errors)
 		if errors:
 			raise ConfigError("\n".join(f"  - {e}" for e in errors))
 		return cls(**sections)
@@ -405,6 +427,20 @@ def _check_params(p, section, errors):
 	need(1 <= p.delta <= 5, f"delta must be between 1 and 5, got {p.delta}")
 	need(1 <= p.delta_fit <= 5, f"delta_fit must be between 1 and 5, got {p.delta_fit}")
 	need(p.sigmaZ > 0 and p.sigmaXY > 0, "sigmaZ and sigmaXY must be positive")
+
+
+def _check_run(r, errors):
+	"""Check ``[run]`` and write ``gpus`` as the text the ``--gpus`` option takes."""
+	if r.gpus is not None:
+		text = ",".join(str(g) for g in r.gpus) if isinstance(r.gpus, list) else r.gpus
+		text = re.sub(r"\s+", "", text)
+		if text != "all" and not re.fullmatch(r"\d+(,\d+)*", text):
+			errors.append(f"[run] gpus must be 'all', GPU numbers such as '0,1,2' or a list such as "
+			              f"[0, 1, 2], got {r.gpus!r}")
+		else:
+			r.gpus = text
+	if r.prefetch < 1:
+		errors.append(f"[run] prefetch must be at least 1, got {r.prefetch}")
 
 
 def _check_paths(p, base_dir, check_files, errors):

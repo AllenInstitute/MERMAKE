@@ -38,6 +38,7 @@ One `mermake` process drives one GPU. To use more, run one process per GPU, each
 
 ```bash
 uv run mermake --gpus all settings.toml        # one worker per GPU of this machine (or --gpus 0,2)
+                                               # the same in the settings file, for a job without options: [run] gpus = "all"
 uv run mermake --shard 2/8 settings.toml       # one process: share 2 (from 0) of 8
 sbatch --array=0-7 scripts/run_slurm_parallel.sbatch   # SLURM: 8 shards, one GPU each
 ```

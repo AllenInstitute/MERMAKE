@@ -62,17 +62,19 @@ def build_parser(prog=None):
 	parser = CustomArgumentParser(description='', formatter_class=argparse.RawTextHelpFormatter, usage=usage)
 	parser.add_argument('settings', type=is_valid_file, nargs='?', help='settings file')
 	parser.add_argument('-g', '--gpu', type=int, default=None,
-		help="The gpu to use, counted among the visible ones. By default the environment is left "
-		     "alone, so a scheduler's choice (CUDA_VISIBLE_DEVICES) is kept and the first visible gpu is used")
+		help="The gpu to use, counted among the visible ones, in one process (it overrides [run] gpus of the "
+		     "settings file). By default the environment is left alone, so a scheduler's choice "
+		     "(CUDA_VISIBLE_DEVICES) is kept and the first visible gpu is used")
 	parser.add_argument('--gpus', default=None, metavar='LIST',
 		help="Run one worker per gpu on this machine: 'all' or comma separated gpu numbers, for example 0,1,2,3. "
-		     "Each worker takes its own share of the fields of view")
+		     "Each worker takes its own share of the fields of view. Default: [run] gpus of the settings file")
 	parser.add_argument('--shard', type=parse_shard, default=None, metavar='I/N',
 		help="Process only share I (from 0) of N of the fields of view. Run one process per share, for "
 		     "example one per gpu or one per SLURM array task. Every round of a field of view stays together")
-	parser.add_argument('--prefetch', type=positive_int, default=5, metavar='N',
-		help="Images read ahead of the gpu [5]. Each one takes the memory of a whole image (about 2.3 GiB "
-		     "for 4 channels of 40 x 2800 x 2800), and a run holds a few more than this")
+	parser.add_argument('--prefetch', type=positive_int, default=None, metavar='N',
+		help="Images read ahead of the gpu [[run] prefetch of the settings file, 5]. Each one takes the memory "
+		     "of a whole image (about 2.3 GiB for 4 channels of 40 x 2800 x 2800), and a run holds a few more "
+		     "than this")
 	parser.add_argument('-c', '--check', action="store_true", help="Check a single zarr")
 	parser.add_argument('--print-example', action="store_true",
 		help="Print a minimal example settings file and exit")
@@ -91,7 +93,21 @@ def build_parser(prog=None):
 	return parser
 
 
-def dry_run(config, shard=None):
+def effective_gpus(args):
+	"""The ``--gpus`` value a run uses: the command line's, otherwise ``[run] gpus`` of the settings file.
+
+	The file's value only applies to a normal run that names no gpu. ``--gpu`` overrides it (it is also
+	what the launcher starts each of its workers with, so that they do not start workers of their own),
+	and ``--check`` and ``--suggest-threshold`` are single-process tools that ignore it.
+	"""
+	if args.gpus is not None:
+		return args.gpus
+	if args.gpu is None and not (args.check or args.suggest_threshold):
+		return args.settings.run.gpus
+	return None
+
+
+def dry_run(config, shard=None, gpus=None, prefetch=None):
 	"""Print what a run would process. Needs no GPU."""
 	from .io.naming import FolderFilter, shard_matches
 	paths = config.paths
@@ -107,6 +123,8 @@ def dry_run(config, shard=None):
 	print(folder_filter.summary(matches))
 	print(f"{sum(map(len, matches.values()))} images in {len(matches)} (set, fov) groups")
 	print(f"output folder: {paths.output_folder}")
+	workers = f"one per entry of gpus = {gpus}" if gpus else "one process, on the first visible gpu"
+	print(f"workers: {workers}, prefetch {prefetch if prefetch is not None else config.run.prefetch}")
 
 
 def main(argv=None):
@@ -123,15 +141,19 @@ def main(argv=None):
 	if args.print_config:
 		print(args.settings.to_toml())
 		return
+	# the command line comes first, then [run] of the settings file, then the defaults
+	if args.prefetch is None:
+		args.prefetch = args.settings.run.prefetch
+	gpus = effective_gpus(args)
 	if args.dry_run:
-		dry_run(args.settings, args.shard)
+		dry_run(args.settings, args.shard, gpus, args.prefetch)
 		return
 
-	if args.gpus is not None:
-		if args.gpu is not None:
-			parser.error("--gpus and --gpu cannot be combined")
+	if args.gpus is not None and args.gpu is not None:
+		parser.error("--gpus and --gpu cannot be combined")
+	if gpus is not None:
 		try:
-			devices = launch.parse_gpus(args.gpus)
+			devices = launch.parse_gpus(gpus)
 		except ValueError as e:
 			parser.error(str(e))
 		return launch.run_workers(launch.worker_jobs(argv, devices, shard=args.shard))

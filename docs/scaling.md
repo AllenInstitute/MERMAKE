@@ -19,6 +19,15 @@ mermake --gpus 0,2 settings.toml        # only these two
 
 `--gpus` starts one worker per GPU, each with only its GPU visible and its own shard, and waits for all of them. If a worker fails, the others carry on and the exit status is non-zero. SIGTERM is passed on to the workers.
 
+For a job that cannot take command line options (a Code Ocean run, a script that only starts `mermake settings.toml`), put it in the settings file:
+
+```toml
+[run]
+gpus = "all"    # or "0,2", or [0, 2]
+```
+
+The command line wins over the file: `--gpus` replaces it, and `--gpu N` runs one process on one GPU. `--check` and `--suggest-threshold` ignore it.
+
 GPU numbers count among the GPUs the environment makes visible. If `CUDA_VISIBLE_DEVICES=2,3` is set, `--gpus all` means those two and `--gpu 1` means GPU 3. Without `--gpu` or `--gpus`, `CUDA_VISIBLE_DEVICES` is left alone, so a GPU assigned by a scheduler is used as given.
 
 You can also run the processes yourself, which is what `--gpus` does for you:
@@ -28,6 +37,8 @@ CUDA_VISIBLE_DEVICES=0 mermake --shard 0/2 settings.toml &
 CUDA_VISIBLE_DEVICES=1 mermake --shard 1/2 settings.toml &
 wait
 ```
+
+`--gpus` starts its workers like this, with `--gpu 0` added: the one device each of them can see. Add `--gpu 0` to your own processes as well if the settings file has `[run] gpus`, which they would otherwise obey by starting workers of their own.
 
 ## SLURM
 
@@ -49,7 +60,7 @@ sbatch --dependency=afterok:$jobid scripts/run_slurm_report.sbatch
 
 The numbers here were measured with `scripts/bench_pipeline.py` on real data: four channels of 40 planes of 2800 x 2800 (an image is 2.34 GiB as uint16, about three times its size on disk) and the default settings.
 
-**Host RAM.** An image is held in memory whole, as uint16 after the 8-bit data is squared (and after `sum_channels`). A process holds up to `--prefetch` images in the read-ahead queue plus three more: one waiting to be queued, one being processed and one kept until the next image of the same field of view joins the drift block. Size the memory for a full queue: `(prefetch + 3)` images plus about 2 GiB, which is 20.9 GiB for the default `--prefetch 5` (measured while the GPU was the bottleneck) and 13.4 GiB for `--prefetch 2`. The queue only fills when the GPU is slower than the reader. With the default settings the GPU needs 8.1 s per image and the reader 6.3 s on that machine, so a run peaked at 12.8 GiB, and `--prefetch 2` gave the same 8.1 s per image. If memory is tight, lower `--prefetch`. A machine with four GPUs needs four times the memory of one process.
+**Host RAM.** An image is held in memory whole, as uint16 after the 8-bit data is squared (and after `sum_channels`). A process holds up to `--prefetch` images (or `[run] prefetch` of the settings file) in the read-ahead queue plus three more: one waiting to be queued, one being processed and one kept until the next image of the same field of view joins the drift block. Size the memory for a full queue: `(prefetch + 3)` images plus about 2 GiB, which is 20.9 GiB for the default `--prefetch 5` (measured while the GPU was the bottleneck) and 13.4 GiB for `--prefetch 2`. The queue only fills when the GPU is slower than the reader. With the default settings the GPU needs 8.1 s per image and the reader 6.3 s on that machine, so a run peaked at 12.8 GiB, and `--prefetch 2` gave the same 8.1 s per image. If memory is tight, lower `--prefetch`. A machine with four GPUs needs four times the memory of one process.
 
 **GPU RAM.** One channel at a time is on the GPU, cut into patches of `patch_size + 2 * patch_overlap` pixels, so the memory depends on `patch_size`, `patch_overlap`, the number of z planes and the size of one channel (for the dapi step). It does not depend on the number of channels or fields of view. The peak was **7.0 GiB** with the defaults (`patch_overlap = 110`, `real_fft = true`). Real FFTs halve the FFT buffers, which pays for the 13 % larger patches of the new `patch_overlap`. With complex FFTs and the old code the peak was 9.2 GiB. Lower `patch_size` if the GPU runs out of memory. A pickled dict of several PSFs multiplies the PSF part by the number of PSFs.
 

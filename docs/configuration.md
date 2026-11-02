@@ -40,14 +40,24 @@ None of them needs a GPU.
 
 ## Running
 
-| Option | What it does |
-|---|---|
-| `-g N`, `--gpu N` | use GPU `N`, counted among the visible ones. Without it the environment is left alone and the first visible GPU is used, so a scheduler's `CUDA_VISIBLE_DEVICES` is respected |
-| `--gpus all` or `--gpus 0,1,2` | run one worker per GPU on this machine, each on its own share of the fields of view |
-| `--shard I/N` | process share `I` (from 0) of `N` of the fields of view, every round of a field of view together |
-| `--prefetch N` | images read ahead of the GPU (default 5). Each is held in memory whole, so this sets most of the RAM use |
+How a run uses the machine is set on the command line, or in the `[run]` section of the settings file for a job that cannot take a command line (a Code Ocean run, a script that only starts `mermake settings.toml`):
 
-See [several GPUs and nodes](scaling.md).
+```toml
+[run]
+gpus = "all"       # one worker per visible GPU. Or "0,1", or [0, 1]; a number can repeat
+prefetch = 3
+```
+
+The command line wins over the file, and the file over the defaults.
+
+| Option | `[run]` key | What it does |
+|---|---|---|
+| `-g N`, `--gpu N` | | use GPU `N`, counted among the visible ones, in one process. It overrides `gpus` of the file. Without it the environment is left alone and the first visible GPU is used, so a scheduler's `CUDA_VISIBLE_DEVICES` is respected |
+| `--gpus all` or `--gpus 0,1,2` | `gpus` | run one worker per GPU on this machine, each on its own share of the fields of view |
+| `--shard I/N` | | process share `I` (from 0) of `N` of the fields of view, every round of a field of view together. Command line only, because it differs from one process or node to the next |
+| `--prefetch N` | `prefetch` | images read ahead of the GPU (default 5). Each is held in memory whole, so this sets most of the RAM use |
+
+`--check` and `--suggest-threshold` work in one process and ignore `gpus`. `mermake --dry-run` says how the run would use the machine. See [several GPUs and nodes](scaling.md).
 
 ## Reference
 

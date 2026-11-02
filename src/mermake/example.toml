@@ -30,6 +30,13 @@ fov_range = '0:1'
 #[dapi]
 #patch_size = 300
 
+# How to use the machine, for a job that cannot take a command line. The options --gpus and --prefetch
+# of the command line override these. One worker per GPU ('all', '0,1' or [0, 1]), and the images each
+# worker reads ahead of the GPU:
+#[run]
+#gpus = 'all'
+#prefetch = 3
+
 # To get the results of version 0.1.0 or earlier back, set the following. The defaults are now
 # patch_overlap = 110 (it was 89) and real_fft = true, which make a run about twice as fast and
 # move about 0.4 % of the spots, those at the threshold. `mermake --print-config` says why:

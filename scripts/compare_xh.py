@@ -39,8 +39,8 @@ print(temp_sorted.shape)
 np.testing.assert_allclose(temp_sorted, ref_sorted, rtol=1e-5, atol=1e-8)
 if key == 'Xh_plus':
 	key = 'Xh_minus'
-	ref_sorted = sort_Xh(ref_data[key])
-	temp_sorted = sort_Xh(temp_data[key])
+	ref_sorted = sort_Xh(xh0[key])
+	temp_sorted = sort_Xh(xh1[key])
 	# now compare
 	np.testing.assert_allclose(temp_sorted, ref_sorted, rtol=1e-5, atol=1e-8)
 

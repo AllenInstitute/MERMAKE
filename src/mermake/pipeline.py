@@ -1,0 +1,248 @@
+"""The mermake processing pipeline: read, deconvolve, find maxima, align, save."""
+import sys
+import concurrent.futures
+from types import SimpleNamespace
+
+import numpy as np
+import cupy as cp
+import dask.array as da
+
+from .config import ConfigError
+from .align import drift, drift_save
+from .deconvolver import Deconvolver
+from .io.queue import ImageQueue, Block
+from .io.readers import load_flats, color_indices, dapi_index
+from .io.spots import KIND_HYB, KIND_DAPI_PLUS, KIND_DAPI_MINUS
+from .maxima import find_local_maxima
+
+_last_len = 0
+
+
+class Saver:
+	"""A thread pool for saving results while the next image is processed.
+
+	A failed save raises in the main thread, at the next ``submit`` or at ``finish``, instead of
+	being lost with the future that nobody looks at.
+	"""
+	def __init__(self, max_workers=9):
+		self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+		self.futures = []
+
+	def submit(self, fn, *args):
+		"""Run ``fn(*args)`` in the pool. Raises the error of an earlier save that failed."""
+		pending = []
+		for future in self.futures:
+			if future.done():
+				future.result()
+			else:
+				pending.append(future)
+		pending.append(self.pool.submit(fn, *args))
+		self.futures = pending
+
+	def finish(self):
+		"""Wait for every save and raise the first error."""
+		self.pool.shutdown(wait=True)
+		for future in self.futures:
+			future.result()
+		self.futures = []
+
+
+def print_clean(msg):
+	"""Overwrite the current terminal line with ``msg``."""
+	global _last_len
+	# Clear previous line
+	sys.stdout.write('\r' + ' ' * _last_len + '\r')
+	sys.stdout.write(msg)
+	sys.stdout.flush()
+	_last_len = len(msg)  # Save new message length
+
+
+def build_config(args):
+	"""Expose the sections of the validated settings as ``args.paths``, ``args.hybs``, ``args.dapi`` and ``args.output``."""
+	for name in ("paths", "hybs", "dapi", "output"):
+		setattr(args, name, getattr(args.settings, name))
+	return args
+
+
+def build_deconvolvers(psfs, chan_shape, args):
+	"""Load the PSFs onto the GPU for the hyb and dapi channels.
+
+	These can be very large objects in gpu ram, adjust accordingly to suit gpu specs.
+	"""
+	# THIS SHOULD PROBABLY BE SET TO THE ZDEPTH OF THE PSF AND NOT THE DEPTH OF THE IMAGE
+	zpad = chan_shape[0] - 1 # this needs to be about the same size as the input z depth
+	hybs = Deconvolver(psfs, chan_shape, zpad=zpad, **vars(args.hybs))
+	# shrink the zpad to limit the loaded psfs in ram since dapi isnt deconvolved as strongly
+	# or you could just use a single psf, ie (0,1500,1500)
+	dapi = Deconvolver(psfs, chan_shape, zpad=zpad//2, **vars(args.dapi))
+	return SimpleNamespace(hybs=hybs, dapi=dapi)
+
+
+def process_dapi(image, queue, ctx):
+	"""Find the dapi maxima (positive and negative) and save them."""
+	icol = -1  # dapi results are saved as channel -1 whatever its index in the image
+	data = image[ctx.dapi].data
+	flat = ctx.flats[ctx.dapi]
+	if isinstance(data, da.Array):
+		return
+	args, chan, buffer = ctx.args, ctx.chan, ctx.buffer
+	chan.set(data)
+	# Deconvolve in-place into the buffer
+	ctx.deconvolver.dapi.apply(chan, flat_field=flat, output=buffer, **vars(args.dapi))
+	# the dapi channel is further normalized by the stdev
+	std_val = float(cp.asnumpy(cp.linalg.norm(buffer.ravel()) / cp.sqrt(buffer.size)))
+	cp.divide(buffer, std_val, out=buffer)
+	Xh_plus = find_local_maxima(buffer, raw=chan, **vars(args.dapi))
+	cp.multiply(buffer, -1, out=buffer)
+	Xh_minus = find_local_maxima(buffer, raw=chan, **vars(args.dapi))
+	# save the data
+	setattr(image, 'Xh_plus', Xh_plus)
+	setattr(image, 'Xh_minus', Xh_minus)
+	# the std is the only dapi diagnostic that is not derived from the spots
+	stats = {KIND_DAPI_PLUS: dict(std_val=std_val), KIND_DAPI_MINUS: dict(std_val=std_val)}
+	ctx.executor.submit(queue.save_results, image, icol, stats)
+
+
+def hyb_threshold(params, icol):
+	"""The ``[hybs]`` threshold of color channel ``icol``: ``threshold`` is one number or one per channel."""
+	threshold = params.threshold
+	return threshold[icol] if isinstance(threshold, list) else threshold
+
+
+def find_hyb_maxima(chan, flat, ctx, negate=False, **overrides):
+	"""Deconvolve ``chan`` patch by patch and return the maxima kept from each patch.
+
+	``negate`` finds the maxima of the negated image, and ``overrides`` replace settings of
+	``[hybs]`` (such as ``threshold``) for this call. Both are used by ``--suggest-threshold``.
+
+	Returns
+	-------
+	Xh : cupy.ndarray
+	    ``(n, 8)`` float32 spots in full-image coordinates.
+	stats : dict
+	    Diagnostics of the call: the sums over all patches (including their overlap margins) of
+	    the raw and the deconvolved data, the number of candidate maxima found and how many of
+	    them were dropped for lying in the overlap margin.
+	"""
+	args = ctx.args
+	if "threshold" not in overrides and isinstance(args.hybs.threshold, list):
+		raise ValueError("[hybs] threshold is a list, pass the threshold of the channel")
+	params = {**vars(args.hybs), **overrides}
+	patch_overlap = args.hybs.patch_overlap
+	# there is probably a better way to do the Xh stacking
+	Xhf = []
+	raw_sum = cp.zeros((), dtype=cp.float64)
+	deconv_sum = cp.zeros((), dtype=cp.float64)
+	n_candidates = 0
+	for x, y, patch, raw in ctx.deconvolver.hybs.patch_wise(chan, flat, **vars(args.hybs)):
+		raw_sum += raw.sum(dtype=cp.float64)
+		deconv_sum += patch.sum(dtype=cp.float64)
+		if negate:
+			cp.multiply(patch, -1, out=patch)
+		Xh = find_local_maxima(patch, raw=raw, **params)
+		n_candidates += Xh.shape[0]
+		keep = cp.all((Xh[:,1:3] >= patch_overlap) & (Xh[:,1:3] < cp.array([patch.shape[1] - patch_overlap, patch.shape[2] - patch_overlap])), axis=-1)
+		if cp.any(keep):
+			Xh = Xh[keep]
+			Xh[:,1] += x - patch_overlap
+			Xh[:,2] += y - patch_overlap
+			Xhf.append(Xh)
+	Xh = cp.vstack(Xhf) if Xhf else cp.zeros([0,8], dtype=cp.float32)
+	stats = dict(raw_sum=float(raw_sum), deconv_sum=float(deconv_sum), n_candidates=n_candidates,
+	             n_edge_dropped=n_candidates - Xh.shape[0])
+	return Xh, stats
+
+
+def process_hyb_channel(image, icol, queue, ctx):
+	"""Process one color channel of ``image`` and save its maxima."""
+	chan = ctx.colors[icol]
+	data = image[chan].data
+	if isinstance(data, da.Array):
+		return
+	ctx.chan.set(data)
+	Xhf, stats = find_hyb_maxima(ctx.chan, ctx.flats[chan], ctx,
+	                              threshold=hyb_threshold(ctx.args.hybs, icol))
+	setattr(image, f'col{icol}', Xhf)
+	ctx.executor.submit(queue.save_results, image, icol, {KIND_HYB: stats})
+
+
+def drift_block(block, ctx):
+	"""Do the drift of a complete block of images of a fov and start saving it."""
+	if result := drift(block):
+		ctx.executor.submit(drift_save, *result)
+		del result
+	# do the decoding
+	# here eventually
+
+
+def finish_block(image, ctx):
+	"""Add ``image`` to the block of its fov. If it belongs to the next fov, close out the block first."""
+	block = ctx.block
+	if not block.add(image):
+		drift_block(block, ctx)
+		# now add the image to the newly cleared block
+		block.clear()
+		block.add(image)
+
+
+def process_image(image, queue, ctx):
+	"""Run every stage on one image."""
+	print('running on:', image.path, flush=True)
+	process_dapi(image, queue, ctx)
+
+	for icol in range(len(ctx.colors)):
+		process_hyb_channel(image, icol, queue, ctx)
+	# this block of images for a fov is over
+	finish_block(image, ctx)
+
+
+def run(args):
+	"""Run the pipeline described by the parsed command line ``args``."""
+	build_config(args)
+	psfs = np.load(args.paths.psf_file, allow_pickle=True)
+
+	# the save file executor to do the saving in parallel with computations
+	executor = Saver(max_workers=9)
+
+	print_clean('Finding input image files.')
+
+	with ImageQueue(args, prefetch_count=getattr(args, 'prefetch', 5)) as queue:
+		print_clean(queue.summary)
+		if queue.n_images == 0:
+			print('\nNo images to process.', flush=True)
+			return
+		# set some things based on input images
+		ncol, *chan_shape = queue.shape
+		threshold = args.hybs.threshold
+		if isinstance(threshold, list) and len(threshold) != ncol - 1:
+			raise ConfigError(f"[hybs] threshold has {len(threshold)} values but the images have "
+			                  f"{ncol - 1} color channels (channel {dapi_index(ncol, args.paths.dapi_channel)} is dapi)")
+
+		# buffers to copy into
+		buffer = cp.empty(chan_shape, dtype=cp.float32)
+		chan = cp.empty(chan_shape, dtype=cp.uint16)
+		flats = load_flats(shape=queue.shape, **vars(args.paths))
+
+		print_clean('Loading PSFs into GPU ram.')
+		deconvolver = build_deconvolvers(psfs, chan_shape, args)
+
+		if args.check:
+			from .viz import view_napari
+			deconvolver.buffer = buffer
+			deconvolver.flats = flats
+			view_napari(queue, deconvolver, args)
+
+		ctx = SimpleNamespace(
+			args=args, ncol=ncol, dapi=dapi_index(ncol, args.paths.dapi_channel),
+			colors=color_indices(ncol, args.paths.dapi_channel), buffer=buffer, chan=chan, flats=flats,
+			deconvolver=deconvolver, executor=executor, block=Block(),
+		)
+
+		print_clean('Starting image processing.\n')
+		for image in queue:
+			process_image(image, queue, ctx)
+			del image
+		# the images are over, so the block of the last fov is complete too
+		if ctx.block:
+			drift_block(ctx.block, ctx)
+		executor.finish()

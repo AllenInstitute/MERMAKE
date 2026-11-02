@@ -1,116 +1,85 @@
-Introduction
-------------
-MERMAKE processes MERFISH, smFISH, and IF imaging data by detecting local intensity maxima (puncta) in 3D image stacks. In multiplexed experiments (MERFISH), these puncta are decoded using a user-supplied codebook, while in smFISH mode and IF, the puncta are simply called and reported as-is.
+# MERMAKE
 
-To install `MERMAKE`,
-```
-python3 -m pip install mermake
-```
+MERMAKE finds the puncta (local intensity maxima) in 3D fluorescence image stacks from MERFISH, smFISH and IF experiments, and measures the drift of each field of view between imaging rounds. Deconvolution and peak finding run on an NVIDIA GPU with [CuPy](https://cupy.dev). Decoding the puncta against a codebook is not part of MERMAKE yet; it is meant to be done on the output.
 
-## ❗The newest version of mermake (>= 0.0.61) does drift but requires the nightly release of cupy available via:
- 
-```
-pip install --pre cupy-cuda12x==14.0.0a1 -f https://pip.cupy.dev/pre
+## Install
+
+You need an NVIDIA GPU. Pick the extra for your CUDA version, `cuda12` or `cuda11`. No CUDA Toolkit or `nvcc` is needed.
+
+```bash
+uv sync --extra cuda12          # or: python3 -m pip install "mermake[cuda12]"
 ```
 
-## ⚠️ GPU Requirements & CUDA Toolkit
+## Quickstart
 
-MERMAKE relies on **CuPy** for GPU-accelerated image processing. To run MERMAKE successfully, you must have:
-
-1. An **NVIDIA GPU** with CUDA support
-2. The **CUDA Toolkit** installed (Refer to the official CuPy installation <a href="https://docs.cupy.dev/en/stable/install.html" target="_blank">guide</a>)
-
-## MERMAKE pipe line
-the general steps of the MERMAKE merfish pipeline is:
-Here is a simple flow chart:
-
-```mermaid
-graph TD;
-    A["microscope"]--image capture-->B["zarr \(images\)"];
-    B["zarr \(images\)"]--fitting-->C["xfits \(local maxima\)"];
-    C["xfits \(local maxima\)"]--decoding-->D["decoded"];
-    C["xfits \(local maxima\)"]--segmentation-->S["segm"];
-    D["decoded"]---->E["final spots"];
-    S["segm"]---->E["final spots"];
-    E["final spots"]---->F["h5ad"];
-
-```
-
-##  MERMAKE Usage
-
-To run **MERMAKE**, you'll need to provide a configuration TOML file with a few key settings describing your experiment. 
-```
-mermake my_settings.toml
-```
-
-If mermake is run without providing a toml file, it will warn about the usage and print out the toml file format. Most users only need to edit the `[paths]` section.
-
-| TOML Section | Variable Name     | Description                                                                 |
-|--------------|-------------------|-----------------------------------------------------------------------------|
-| `[paths]`    | `codebook`        | Path to the CSV codebook for decoding barcodes (for MERFISH data only)     |
-| `[paths]`    | `psf_file`        | Path to the PSF file used for deconvolution (e.g., `.npy` or `.pkl`)       |
-| `[paths]`    | `flat_field_tag`  | Prefix path for flat field correction files (e.g., `"Scope3_"`)            |
-| `[paths]`    | `hyb_range`       | Range of hybridization rounds to process (e.g., `'H1_*_set1:H1_*_set3'`) |
-| `[paths]`    | `hyb_folders`     | List of folders containing raw imaging data                                |
-| `[paths]`    | `output_folder`   | Path to the folder where MERMAKE should save results                        |
-
-
->  All other sections (`[hybs]`, `[dapi]`, etc.) are preconfigured for most use cases and usually do not need to be changed.  Though to use multi-psfs you will want to set the `tilesize` to the size of the samping grid (ie 300).
-
----
-
-###  Example Config (`config.toml`)
+Write a settings file with the five required paths:
 
 ```toml
 [paths]
-codebook = "codebook.csv"
-psf_file = "psfs/psf_scope3.npy"
-flat_field_tag = "flat_field/Scope3_"
-hyb_range = "H1_*_set1:H16_*_set3"
-hyb_folders = ["experiment_folder"]
-output_folder = "output"
-background_range = 'H0_background_set1:H0_background_set3'
-#---------------------------------------------------------------------------------------#
-#---------------------------------------------------------------------------------------#
-#           you probably dont have to change any of the settings below                  #
-#---------------------------------------------------------------------------------------#
-#---------------------------------------------------------------------------------------#
+psf_file = 'psfs/psf_scope3.npy'
+flat_field_tag = 'flat_field/Scope3_'
+hyb_folders = ['experiment_folder']
+hyb_range = 'H1_BICAN_set1:H16_BICAN_set1'
+output_folder = 'output'
+```
 
-hyb_save =  '{fov}--{tag}--col{icol}__Xhfits.npz'
-dapi_save = '{fov}--{tag}--dapiFeatures.npz'
-drift_save = 'drift_Conv_zscan__{ifov:0>3}--_set{iset}.pkl'
-regex = '''([A-z]+)(\d+)_([^_]+)_set(\d+)(.*)''' #use triple quotes to avoid double escape
+Check it without a GPU, then run it:
 
+```bash
+uv run mermake --dry-run settings.toml    # validate and list the images
+uv run mermake settings.toml              # process; existing results are skipped
+```
+
+`mermake --print-config settings.toml` prints every setting with its description and the value that will be used.
+
+## Several GPUs and nodes
+
+One `mermake` process drives one GPU. To use more, run one process per GPU, each on its own share of the fields of view (every round of a field of view stays in the same share, because its drift needs them all):
+
+```bash
+uv run mermake --gpus all settings.toml        # one worker per GPU of this machine (or --gpus 0,2)
+uv run mermake --shard 2/8 settings.toml       # one process: share 2 (from 0) of 8
+sbatch --array=0-7 scripts/run_slurm_parallel.sbatch   # SLURM: 8 shards, one GPU each
+```
+
+Results are written one field of view at a time, each file under a temporary name until it is complete, so a run that is killed or hits a time limit continues where it stopped when you run it again. Images are read ahead of the GPU, whole, so a process needs RAM for about `--prefetch` + 3 images (13-21 GiB for 4 x 40 x 2800 x 2800 data); `--prefetch 2` is enough when the GPU is the bottleneck. Check that your storage can feed several GPUs with `scripts/bench_read.py`. See [several GPUs and nodes](docs/scaling.md), which also has the measured memory and timings. The SLURM scripts have not been run on a real cluster yet.
+
+## Speed and results
+
+On a Tesla T4 a 4 x 40 x 2800 x 2800 image takes about 8 s with the default settings (26 s in version 0.1.0). Two defaults changed to get there, and they change the results a little:
+
+- `patch_overlap` is now **110** in `[hybs]` and `[dapi]` (it was 89). `patch_size + 2 * patch_overlap` should be a product of 2, 3, 5 and 7 for a fast FFT: 500 + 2 x 110 = 720 is, 500 + 2 x 89 = 678 = 2 x 3 x 113 was not. If you change `patch_size`, change `patch_overlap` to keep that.
+- `real_fft = true` (new) uses real-to-complex FFTs, which take half the time and memory.
+
+About 0.4 % of the spots, those within about 1 % of the threshold, differ from version 0.1.0. To reproduce its results exactly, set this in your settings file:
+
+```toml
 [hybs]
-tile_size = 500
-overlap = 89
-beta = 0.0001
-threshold = 3600
-blur_radius = 30
-delta = 1
-delta_fit = 3
-sigmaZ = 1
-sigmaXY = 1.5
+patch_overlap = 89
+real_fft = false
 
 [dapi]
-tile_size = 500
-overlap = 89
-beta = 0.01
-threshold = 3.0
-blur_radius = 50
-delta = 5
-delta_fit = 5
-sigmaZ = 1
-sigmaXY = 1.5
+patch_overlap = 89
+real_fft = false
 ```
 
-## 🔍 If you only want to process the dapi channels a trick that you can use is
-To set the `hyb_save` toml string to not be dynamic and with different names for each fov and hyb.
-```
-hyb_save =  'Xhfits.npz'
-dapi_save = '{fov}--{tag}--dapiFeatures.npz'
-```
-What this does is trick mermake into thinking the hybs for each fov and channel has already been processed due
-to the existing Xhfits.npz file
+`scripts/bench_pipeline.py` shows where the time and the GPU memory of your own run go. See the [changelog](CHANGELOG.md) and [where the time goes](docs/scaling.md).
 
+## Documentation
 
+- [Installation](docs/installation.md) and [quickstart on the example data](docs/quickstart.md)
+- [Pipeline overview](docs/pipeline.md)
+- [Configuration reference](docs/configuration.md)
+- [Several GPUs and nodes](docs/scaling.md): sharding, SLURM, memory per process and where the time goes
+- [Input and output formats](docs/io-formats.md)
+- [Developer guide](docs/developer.md), [known issues](docs/known-issues.md) and the [changelog](CHANGELOG.md)
+
+To build the site: `uv run --group docs mkdocs serve`. See [CONTRIBUTING.md](CONTRIBUTING.md) to contribute.
+
+## About this fork
+
+This is the Allen Institute fork of [deprekate/mermake](https://github.com/deprekate/mermake), which it started from at version 0.0.74. It was restructured (a `src/` layout, validated settings, tests, documentation) and has diverged: the settings files, the default `patch_overlap` and, for stacks with an odd number of planes, the z coordinates differ from upstream. See the [changelog](CHANGELOG.md).
+
+## License
+
+GNU General Public License v3, see [LICENSE](LICENSE).

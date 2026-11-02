@@ -30,3 +30,20 @@ def test_histograms_share_bins_per_round():
 	table = pa.table({"iset": [1] * 6, "ih": [1, 1, 1, 2, 2, 2], "h": [1., 2., 3., 4., 5., 6.]})
 	edges, hists = report.score_histograms(table, "h", bins=10)
 	assert list(hists) == [(1, 1), (1, 2)] and len(edges) == 11
+
+
+def test_stream_histograms_match_table(tmp_path):
+	rng = np.random.default_rng(1)
+	root = str(tmp_path)
+	for ih in (1, 2):
+		X = rng.random((300, 8)).astype(np.float32) * ih
+		spots.write_spots(root, 1, 0, ih, 0, {"hyb": X})
+	dataset = spots.open_dataset(root, spots.SPOTS_DIR)
+	streamed = report.stream_histograms(dataset, ("h",), batch_size=64)
+	edges, expected = report.score_histograms(dataset.to_table(columns=["iset", "ih", "h"]), "h")
+	got_edges, got = streamed[(0, "h")]
+	assert list(got) == list(expected)
+	# the bin edges come from a sample, so only the shape is compared exactly
+	assert len(got_edges) == len(edges)
+	for key in got:
+		assert np.isclose((got[key] * np.diff(got_edges)).sum(), 1.0)

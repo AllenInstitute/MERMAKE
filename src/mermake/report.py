@@ -68,10 +68,12 @@ def score_histograms(table, score, bins=100):
 	return edges, histograms
 
 
-def plot_score_histograms(table, icol, score, path):
-	"""Draw :func:`score_histograms` of one channel to ``path``. Return whether anything was drawn."""
+def plot_histograms(edges, histograms, icol, score, path):
+	"""Draw per-round ``histograms`` (see :func:`score_histograms`) of one channel to ``path``.
+
+	Return whether anything was drawn.
+	"""
 	plt = _plt()
-	edges, histograms = score_histograms(table, score)
 	if not histograms:
 		return False
 	centers = (edges[1:] + edges[:-1]) / 2
@@ -89,6 +91,70 @@ def plot_score_histograms(table, icol, score, path):
 	fig.savefig(path, dpi=150)
 	plt.close(fig)
 	return True
+
+
+def plot_score_histograms(table, icol, score, path):
+	"""Draw :func:`score_histograms` of one channel to ``path``. Return whether anything was drawn."""
+	edges, histograms = score_histograms(table, score)
+	return plot_histograms(edges, histograms, icol, score, path)
+
+
+def stream_histograms(dataset, scores, bins=100, batch_size=1 << 20):
+	"""Like :func:`score_histograms` for every channel and score of a spots dataset, in two
+	streaming passes so that the memory used does not grow with the number of spots.
+
+	The first pass draws a small random sample of every channel to find the bin edges (0.5 to 99.5
+	percentile); the second one counts the spots of every round in those bins.
+
+	Returns
+	-------
+	dict
+	    ``{(icol, score): (edges, {(iset, ih): density})}``. Channels without a finite score are left out.
+	"""
+	import pyarrow.dataset as ds
+	rng = np.random.default_rng(0)
+	not_dapi = ds.field("icol") != -1
+	samples = {}
+	for batch in dataset.to_batches(columns=["icol", *scores], filter=not_dapi, batch_size=batch_size):
+		cols = batch.column("icol").to_numpy(zero_copy_only=False)
+		for icol in np.unique(cols):
+			rows = np.flatnonzero(cols == icol)
+			rows = rng.choice(rows, min(len(rows), max(1000, len(rows) // 1000)), replace=False)
+			for score in scores:
+				v = batch.column(score).to_numpy(zero_copy_only=False)[rows]
+				samples.setdefault((int(icol), score), []).append(v[np.isfinite(v)])
+	edges = {}
+	for key, parts in samples.items():
+		v = np.concatenate(parts)
+		if len(v):
+			lo, hi = np.percentile(v, [0.5, 99.5])
+			edges[key] = np.linspace(lo, hi if hi > lo else lo + 1, bins + 1)
+	del samples
+
+	counts = {}
+	for batch in dataset.to_batches(columns=["icol", "iset", "ih", *scores], filter=not_dapi,
+	                                batch_size=batch_size):
+		cols = batch.column("icol").to_numpy(zero_copy_only=False)
+		isets = batch.column("iset").to_numpy(zero_copy_only=False)
+		rounds = batch.column("ih").to_numpy(zero_copy_only=False)
+		for icol in np.unique(cols):
+			in_col = cols == icol
+			for score in scores:
+				if (int(icol), score) not in edges:
+					continue
+				v = batch.column(score).to_numpy(zero_copy_only=False)
+				ok = in_col & np.isfinite(v)
+				for iset, ih in set(zip(isets[ok].tolist(), rounds[ok].tolist())):
+					sel = ok & (isets == iset) & (rounds == ih)
+					n = np.histogram(v[sel], bins=edges[(int(icol), score)])[0]
+					per_round = counts.setdefault((int(icol), score), {})
+					per_round[(iset, ih)] = per_round.get((iset, ih), 0) + n
+	result = {}
+	for key, per_round in counts.items():
+		widths = np.diff(edges[key])
+		result[key] = (edges[key], {r: n / (n.sum() * widths) if n.sum() else n.astype(float)
+		                            for r, n in sorted(per_round.items())})
+	return result
 
 
 def plot_heatmap(diagnostics, value, title, path, fmt="{:.0f}"):
@@ -143,15 +209,11 @@ def make_report(output_folder, report_dir=None, scores=DEFAULT_SCORES):
 	written = []
 
 	dataset = spots.open_dataset(output_folder, spots.SPOTS_DIR)
-	import pyarrow.dataset as ds
-	channels = sorted(c for c in dataset.to_table(columns=["icol"]).column("icol").unique().to_pylist()
-	                  if c != -1)
-	for icol in channels:
-		table = dataset.to_table(columns=["iset", "ih", *scores], filter=ds.field("icol") == icol)
-		for score in scores:
-			path = os.path.join(report_dir, f"hist_{score}_col{icol}.png")
-			if plot_score_histograms(table, icol, score, path):
-				written.append(path)
+	histograms = stream_histograms(dataset, tuple(scores))
+	for (icol, score), (edges, per_round) in sorted(histograms.items()):
+		path = os.path.join(report_dir, f"hist_{score}_col{icol}.png")
+		if plot_histograms(edges, per_round, icol, score, path):
+			written.append(path)
 
 	diagnostics = spots.open_dataset(output_folder, spots.DIAGNOSTICS_DIR).to_table()
 	path = os.path.join(report_dir, "n_spots.png")

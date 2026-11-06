@@ -213,6 +213,24 @@ class TestRunSection:
 		cli.main(["--prefetch", "4", make_settings("[run]\nprefetch = 2\n")])
 		assert stubs[-1].prefetch == 4
 
+	def test_read_threads_and_overlap_come_from_the_command_line_then_the_file(self, make_settings, stubs,
+	                                                                           monkeypatch):
+		self.environ(monkeypatch)
+		cli.main([make_settings()])
+		assert stubs[-1].read_threads is None and stubs[-1].overlap_channels is False
+		path = make_settings("[run]\nread_threads = 8\noverlap_channels = true\n")
+		cli.main([path])
+		assert stubs[-1].read_threads == 8 and stubs[-1].overlap_channels is True
+		cli.main(["--read-threads", "24", make_settings()])
+		assert stubs[-1].read_threads == 24
+		cli.main(["--overlap-channels", make_settings()])
+		assert stubs[-1].overlap_channels is True
+
+	def test_read_threads_reach_the_workers(self, make_settings, launched, monkeypatch):
+		self.environ(monkeypatch, CUDA_VISIBLE_DEVICES="0")
+		cli.main(["--gpus", "0,0", make_settings("[run]\nread_threads = 12\n")])
+		assert [env["DASK_NUM_WORKERS"] for _, env in launched] == ["12", "12"]
+
 	def test_gpus_from_the_file_start_one_worker_per_gpu(self, make_settings, launched, stubs, monkeypatch):
 		self.environ(monkeypatch, CUDA_VISIBLE_DEVICES="4,5,6")
 		assert cli.main([make_settings("[run]\ngpus = 'all'\n")]) == 0
@@ -272,7 +290,11 @@ class TestRunSection:
 		cli.main(["--dry-run", "--gpus", "all", "--prefetch", "3", make_settings()])
 		assert "workers: one per entry of gpus = all, prefetch 3" in capsys.readouterr().out
 		cli.main(["--dry-run", make_settings()])
-		assert "workers: one process, on the first visible gpu, prefetch 5" in capsys.readouterr().out
+		out = capsys.readouterr().out
+		assert "workers: one process, on the first visible gpu, prefetch 5" in out
+		assert "split between the workers, channels read one after the other" in out
+		cli.main(["--dry-run", "--read-threads", "16", "--overlap-channels", make_settings()])
+		assert "read threads per worker: 16, channels read all at once" in capsys.readouterr().out
 
 	def test_print_config_shows_the_section(self, make_settings, capsys):
 		cli.main(["--print-config", make_settings("[run]\ngpus = 'all'\n")])

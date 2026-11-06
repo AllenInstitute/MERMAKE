@@ -97,7 +97,7 @@ def strip_option(argv, name):
 	return out
 
 
-def worker_jobs(argv, devices, shard=None, environ=None, cpus=None):
+def worker_jobs(argv, devices, shard=None, environ=None, cpus=None, read_threads=None):
 	"""The command and environment of every worker.
 
 	Worker ``k`` runs with only ``devices[k]`` visible and takes share ``index * len(devices) + k``
@@ -120,6 +120,8 @@ def worker_jobs(argv, devices, shard=None, environ=None, cpus=None):
 	    Default ``os.environ``.
 	cpus : int, optional
 	    Cores of this machine, to split between the workers. Default: the cores this process may use.
+	read_threads : int, optional
+	    Read threads of each worker (``[run] read_threads``). Default: ``cpus`` split between the workers.
 
 	Returns
 	-------
@@ -132,7 +134,10 @@ def worker_jobs(argv, devices, shard=None, environ=None, cpus=None):
 	if cpus is None:
 		cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
 	# without this every worker would start a reader thread pool as large as the whole machine
-	environ.setdefault("DASK_NUM_WORKERS", str(max(1, cpus // n)))
+	if read_threads:
+		environ["DASK_NUM_WORKERS"] = str(read_threads)
+	else:
+		environ.setdefault("DASK_NUM_WORKERS", str(max(1, cpus // n)))
 	base = strip_option(strip_option(argv, "--gpus"), "--shard")
 	jobs = []
 	for k, device in enumerate(devices):

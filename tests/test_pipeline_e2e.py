@@ -267,6 +267,17 @@ def test_workers_on_one_gpu(three_fovs):
 	assert spot_rows(out).equals(spot_rows(ref))
 
 
+def test_read_threads_and_overlapped_channels_give_the_same_spots(three_fovs):
+	"""Reading all channels of an image at once, with a set thread count, changes only how it is read."""
+	root, _, ref = three_fovs
+	settings = settings_for(root, "out_overlap")
+	proc = mermake(settings, "--read-threads", "3", "--overlap-channels")
+	assert proc.returncode == 0, proc.stderr[-2000:]
+	out = root / "out_overlap"
+	assert output_files(out) == output_files(ref)
+	assert spot_rows(out).equals(spot_rows(ref))
+
+
 def test_a_failing_worker_fails_the_run(three_fovs):
 	root, _, _ = three_fovs
 	settings = settings_for(root, "out_failing")

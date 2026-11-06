@@ -30,12 +30,16 @@ fov_range = '0:1'
 #[dapi]
 #patch_size = 300
 
-# How to use the machine, for a job that cannot take a command line. The options --gpus and --prefetch
-# of the command line override these. One worker per GPU ('all', '0,1' or [0, 1]), and the images each
-# worker reads ahead of the GPU:
+# How to use the machine, for a job that cannot take a command line. The options --gpus, --prefetch,
+# --read-threads and --overlap-channels of the command line override these. One worker per GPU ('all',
+# '0,1' or [0, 1]), the images each worker reads ahead of the GPU, the threads each worker reads with
+# (default: the cores, split between the workers; more helps on slow network storage), and whether
+# the channels of an image are read at once (default false; it can hold one more image of RAM):
 #[run]
 #gpus = 'all'
 #prefetch = 3
+#read_threads = 16
+#overlap_channels = true
 
 # To get the results of version 0.1.0 or earlier back, set the following. The defaults are now
 # patch_overlap = 110 (it was 89) and real_fft = true, which make a run about twice as fast and

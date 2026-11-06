@@ -294,6 +294,22 @@ class TestRun:
 			with pytest.raises(ConfigError, match="prefetch must be an integer"):
 				load(run={"prefetch": value})
 
+	def test_read_threads(self):
+		assert load().run.read_threads is None
+		assert load(run={"read_threads": 16}).run.read_threads == 16
+		for value in (0, -2):
+			with pytest.raises(ConfigError, match="read_threads must be at least 1"):
+				load(run={"read_threads": value})
+		for value in ("16", True, 2.5):
+			with pytest.raises(ConfigError, match="read_threads"):
+				load(run={"read_threads": value})
+
+	def test_overlap_channels(self):
+		assert load().run.overlap_channels is False
+		assert load(run={"overlap_channels": True}).run.overlap_channels is True
+		with pytest.raises(ConfigError, match="overlap_channels"):
+			load(run={"overlap_channels": "yes"})
+
 	def test_misspelled_key_suggests_fix(self):
 		with pytest.raises(ConfigError, match="did you mean 'gpus'"):
 			load(run={"gpu": 1})

@@ -88,6 +88,10 @@ class TestWorkerJobs:
 		jobs = launch.worker_jobs(["s.toml"], ["0"], environ={"DASK_NUM_WORKERS": "3"}, cpus=16)
 		assert jobs[0][1]["DASK_NUM_WORKERS"] == "3"
 
+	def test_read_threads_replace_the_split_of_the_cores(self):
+		jobs = launch.worker_jobs(["s.toml"], ["0", "0"], environ={"DASK_NUM_WORKERS": "3"}, cpus=4, read_threads=16)
+		assert [env["DASK_NUM_WORKERS"] for _, env in jobs] == ["16", "16"]
+
 	def test_the_machines_share_is_split_between_its_workers(self):
 		# machine 1 of 3 with 2 GPUs takes shares 2 and 3 of 6
 		jobs = launch.worker_jobs(["--shard", "1/3", "s.toml"], ["0", "1"], shard=(1, 3), environ={}, cpus=4)

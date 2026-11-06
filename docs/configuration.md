@@ -56,6 +56,8 @@ The command line wins over the file, and the file over the defaults.
 | `--gpus all` or `--gpus 0,1,2` | `gpus` | run one worker per GPU on this machine, each on its own share of the fields of view |
 | `--shard I/N` | | process share `I` (from 0) of `N` of the fields of view, every round of a field of view together. Command line only, because it differs from one process or node to the next |
 | `--prefetch N` | `prefetch` | images read ahead of the GPU (default 5). Each is held in memory whole, so this sets most of the RAM use |
+| `--read-threads N` | `read_threads` | threads each worker reads and decompresses chunks with. Not set: the cores of the machine, split between the workers. Reading mostly waits on the storage, so on storage with a high cost per request (a FUSE mount of S3) more threads than cores read faster, up to what the storage delivers |
+| `--overlap-channels` | `overlap_channels` | read all the channels of an image at once instead of one after the other (default `false`), so the storage is not left idle at the end of each channel. While an image is read it can hold up to one more image of RAM |
 
 `--check` and `--suggest-threshold` work in one process and ignore `gpus`. `mermake --dry-run` says how the run would use the machine. See [several GPUs and nodes](scaling.md).
 

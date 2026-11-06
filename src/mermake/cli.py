@@ -75,6 +75,13 @@ def build_parser(prog=None):
 		help="Images read ahead of the gpu [[run] prefetch of the settings file, 5]. Each one takes the memory "
 		     "of a whole image (about 2.3 GiB for 4 channels of 40 x 2800 x 2800), and a run holds a few more "
 		     "than this")
+	parser.add_argument('--read-threads', type=positive_int, default=None, metavar='N',
+		help="Threads each worker reads images with [[run] read_threads of the settings file; not set: the "
+		     "cores of the machine split between the workers]. More than the cores helps on storage with a "
+		     "high cost per request")
+	parser.add_argument('--overlap-channels', action="store_true", default=None,
+		help="Read all the channels of an image at once instead of one after the other "
+		     "[[run] overlap_channels of the settings file, off]. Can hold up to one more image of RAM")
 	parser.add_argument('-c', '--check', action="store_true", help="Check a single zarr")
 	parser.add_argument('--print-example', action="store_true",
 		help="Print a minimal example settings file and exit")
@@ -107,7 +114,7 @@ def effective_gpus(args):
 	return None
 
 
-def dry_run(config, shard=None, gpus=None, prefetch=None):
+def dry_run(config, shard=None, gpus=None, prefetch=None, read_threads=None, overlap_channels=None):
 	"""Print what a run would process. Needs no GPU."""
 	from .io.naming import FolderFilter, shard_matches
 	paths = config.paths
@@ -125,6 +132,10 @@ def dry_run(config, shard=None, gpus=None, prefetch=None):
 	print(f"output folder: {paths.output_folder}")
 	workers = f"one per entry of gpus = {gpus}" if gpus else "one process, on the first visible gpu"
 	print(f"workers: {workers}, prefetch {prefetch if prefetch is not None else config.run.prefetch}")
+	threads = read_threads if read_threads is not None else config.run.read_threads
+	overlap = overlap_channels if overlap_channels is not None else config.run.overlap_channels
+	print(f"read threads per worker: {threads if threads else 'the cores of the machine, split between the workers'}, "
+	      f"channels read {'all at once' if overlap else 'one after the other'}")
 
 
 def main(argv=None):
@@ -144,9 +155,13 @@ def main(argv=None):
 	# the command line comes first, then [run] of the settings file, then the defaults
 	if args.prefetch is None:
 		args.prefetch = args.settings.run.prefetch
+	if args.read_threads is None:
+		args.read_threads = args.settings.run.read_threads
+	if args.overlap_channels is None:
+		args.overlap_channels = args.settings.run.overlap_channels
 	gpus = effective_gpus(args)
 	if args.dry_run:
-		dry_run(args.settings, args.shard, gpus, args.prefetch)
+		dry_run(args.settings, args.shard, gpus, args.prefetch, args.read_threads, args.overlap_channels)
 		return
 
 	if args.gpus is not None and args.gpu is not None:
@@ -156,7 +171,7 @@ def main(argv=None):
 			devices = launch.parse_gpus(gpus)
 		except ValueError as e:
 			parser.error(str(e))
-		return launch.run_workers(launch.worker_jobs(argv, devices, shard=args.shard))
+		return launch.run_workers(launch.worker_jobs(argv, devices, shard=args.shard, read_threads=args.read_threads))
 
 	# set this before cupy is imported to make sure to capture the correct gpu
 	if args.gpu is not None:

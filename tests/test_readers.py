@@ -144,3 +144,41 @@ class TestDapiChannel:
 	def test_out_of_range(self):
 		with pytest.raises(ValueError, match="dapi_channel"):
 			dapi_index(4, 4)
+
+
+class TestReadChannels:
+	"""``ImageQueue._read_channels``: one channel after the other, or all at once, gives the same arrays."""
+
+	@staticmethod
+	def queue(read_threads=None, overlap=False):
+		from mermake.io.queue import ImageQueue
+		q = ImageQueue.__new__(ImageQueue)
+		q.read_threads, q.overlap_channels = read_threads, overlap
+		return q
+
+	@staticmethod
+	def container():
+		"""A 4-channel image as the reader sees it: one lazy sub-container per channel."""
+		image = da.from_array(np.arange(4 * 3 * 5 * 5, dtype=np.uint16).reshape(4, 3, 5, 5), chunks=(1, 1, 5, 5))
+		container = Container(image)
+		container.data = [Container(image[i]) for i in range(4)]
+		return container, image.compute()
+
+	@pytest.mark.parametrize("overlap", [False, True])
+	@pytest.mark.parametrize("threads", [None, 1, 3])
+	def test_same_arrays_either_way(self, overlap, threads):
+		container, expected = self.container()
+		self.queue(threads, overlap)._read_channels(container, [0, 2, 3])
+		for c in (0, 2, 3):
+			assert isinstance(container[c].data, np.ndarray)
+			np.testing.assert_array_equal(container[c].data, expected[c])
+		assert isinstance(container[1].data, da.Array)  # not asked for, still lazy
+
+	def test_overlap_reads_in_one_call_with_the_thread_count(self, monkeypatch):
+		import dask
+		calls = []
+		real = dask.compute
+		monkeypatch.setattr(dask, "compute", lambda *a, **kw: calls.append((len(a), kw)) or real(*a, **kw))
+		container, _ = self.container()
+		self.queue(5, True)._read_channels(container, [0, 1, 2, 3])
+		assert calls == [(4, {"num_workers": 5})]

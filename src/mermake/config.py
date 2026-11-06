@@ -179,6 +179,17 @@ class Run:
 		"Images each worker reads ahead of the GPU. Each is held in memory whole (about 2.3 GiB for 4 "
 		"channels of 40 x 2800 x 2800) and a worker holds a few more than this, so it sets most of the "
 		"RAM use. The option `--prefetch` of the command line overrides it.", unit="images", default=5)
+	read_threads: Optional[int] = _f(
+		"Threads each worker reads and decompresses image chunks with. Not set: the machine's cores, split "
+		"between the workers. Reading is mostly waiting on storage, so on storage with a high cost per "
+		"request (a FUSE mount of S3, about 0.25 s per file) more threads than cores read faster, up to "
+		"what the storage delivers. The option `--read-threads` of the command line overrides it.",
+		unit="threads", default=None)
+	overlap_channels: bool = _f(
+		"Read all the channels of an image at once instead of one after the other, so that the storage "
+		"is not left idle at the end of each channel. Off by default: while an image is read it can hold "
+		"up to one more image of host RAM. The option `--overlap-channels` of the command line turns it "
+		"on.", default=False)
 
 
 # Defaults of [hybs] and [dapi].
@@ -441,6 +452,8 @@ def _check_run(r, errors):
 			r.gpus = text
 	if r.prefetch < 1:
 		errors.append(f"[run] prefetch must be at least 1, got {r.prefetch}")
+	if r.read_threads is not None and r.read_threads < 1:
+		errors.append(f"[run] read_threads must be at least 1, got {r.read_threads}")
 
 
 def _check_paths(p, base_dir, check_files, errors):

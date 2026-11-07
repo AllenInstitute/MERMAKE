@@ -8,7 +8,7 @@ import cupy as cp
 import dask.array as da
 
 from .config import ConfigError
-from .align import drift, drift_save
+from .align import save_drift, snapshot
 from .deconvolver import Deconvolver
 from .io.queue import ImageQueue, Block
 from .io.readers import load_flats, color_indices, dapi_index
@@ -16,6 +16,10 @@ from .io.spots import KIND_HYB, KIND_DAPI_PLUS, KIND_DAPI_MINUS
 from .maxima import find_local_maxima
 
 _last_len = 0
+
+# sum of squares without the image-sized x*x temporary of cp.linalg.norm (1.2 GiB for a 40-plane dapi
+# buffer, enough to run two workers on a 15 GiB T4 out of memory); same float32 result
+_sum_sq = cp.ReductionKernel('T x', 'T y', 'x * x', 'a + b', 'y = a', '0', 'sum_sq')
 
 
 class Saver:
@@ -90,7 +94,7 @@ def process_dapi(image, queue, ctx):
 	# Deconvolve in-place into the buffer
 	ctx.deconvolver.dapi.apply(chan, flat_field=flat, output=buffer, **vars(args.dapi))
 	# the dapi channel is further normalized by the stdev
-	std_val = float(cp.asnumpy(cp.linalg.norm(buffer.ravel()) / cp.sqrt(buffer.size)))
+	std_val = float(cp.sqrt(_sum_sq(buffer)) / cp.sqrt(buffer.size))
 	cp.divide(buffer, std_val, out=buffer)
 	Xh_plus = find_local_maxima(buffer, raw=chan, **vars(args.dapi))
 	cp.multiply(buffer, -1, out=buffer)
@@ -167,12 +171,14 @@ def process_hyb_channel(image, icol, queue, ctx):
 
 
 def drift_block(block, ctx):
-	"""Do the drift of a complete block of images of a fov and start saving it."""
-	if result := drift(block):
-		ctx.executor.submit(drift_save, *result)
-		del result
-	# do the decoding
-	# here eventually
+	"""Start the drift of a complete block of images of a fov in the background.
+
+	The drift runs on the CPU in the save threads, from a numpy copy of the dapi maxima, so the GPU
+	goes on with the next image instead of waiting for it.
+	"""
+	images = [snapshot(image) for image in block]
+	ctx.executor.submit(save_drift, images, block.iset(), block.ifov(), block.drift_file(),
+	                    ctx.args.paths.output_folder, ctx.args.settings.output.format)
 
 
 def finish_block(image, ctx):

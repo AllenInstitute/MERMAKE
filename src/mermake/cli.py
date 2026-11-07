@@ -89,6 +89,10 @@ def build_parser(prog=None):
 		help="Print every setting with its description and the value that would be used, then exit")
 	parser.add_argument('--dry-run', action="store_true",
 		help="Validate the settings and list the images that would be processed, then exit")
+	parser.add_argument('--drift', action="store_true",
+		help="Compute the drift of every fitted round from the dapi maxima in the output folder, relative "
+		     "to the first round, then exit. Reads no images and needs no GPU; rounds already done are "
+		     "skipped, so it can run while images are still being fitted. Works with --shard")
 	parser.add_argument('--suggest-threshold', action="store_true",
 		help="Sample a few images, count the spots found at every threshold and suggest values "
 		     "for the threshold settings, then exit. Needs a GPU")
@@ -162,6 +166,10 @@ def main(argv=None):
 	gpus = effective_gpus(args)
 	if args.dry_run:
 		dry_run(args.settings, args.shard, gpus, args.prefetch, args.read_threads, args.overlap_channels)
+		return
+	if args.drift:
+		from mermake.align import run_drift
+		run_drift(args.settings, args.shard)
 		return
 
 	if args.gpus is not None and args.gpu is not None:

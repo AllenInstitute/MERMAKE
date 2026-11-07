@@ -1,13 +1,39 @@
-"""Drift correction between hybridization rounds by aligning dapi maxima."""
+"""Drift correction between hybridization rounds by aligning dapi maxima.
+
+The alignment runs on numpy arrays (scipy, on the CPU) or on cupy arrays (on the GPU), whichever it
+is given. The pipeline and ``mermake --drift`` use the CPU: the dapi maxima of an image are a few
+thousand points, so the work is small, and on the CPU it neither waits for nor holds up the GPU.
+cupy is only imported for cupy input, so the CPU path also runs on a machine without a GPU.
+"""
 import os
 import pickle
+from pathlib import Path
 
-from .gpu.fft import fftconvolve
+import numpy as np
 
-import cupy as cp
-from cupyx.scipy.spatial import KDTree
-#from scipy.signal import fftconvolve
-#from scipy.spatial import KDTree
+
+def get_array_module(x):
+	"""``numpy`` for numpy arrays (and anything that is not a cupy array), ``cupy`` for cupy arrays."""
+	if type(x).__module__.startswith("cupy"):
+		import cupy
+		return cupy
+	return np
+
+
+def to_numpy(x):
+	"""``x`` as a numpy array, copied from the GPU if it is a cupy array."""
+	return x.get() if hasattr(x, "get") and not isinstance(x, np.ndarray) else np.asarray(x)
+
+
+def _backend(xp):
+	"""``(KDTree, fftconvolve)`` for the array module ``xp``."""
+	if xp is np:
+		from scipy.signal import fftconvolve
+		from scipy.spatial import cKDTree
+		return cKDTree, fftconvolve
+	from cupyx.scipy.spatial import KDTree
+	from .gpu.fft import fftconvolve
+	return KDTree, fftconvolve
 
 class Aligner:
 	"""Find the translation between two sets of 3D points.
@@ -18,9 +44,9 @@ class Aligner:
 
 	Parameters
 	----------
-	X_ref : cupy.ndarray
+	X_ref : numpy.ndarray or cupy.ndarray
 	    Reference points, rows of ``(z, x, y, ...)`` in voxels. Only the first three columns
-	    are used for matching.
+	    are used for matching. The type chooses the backend: scipy on the CPU or cupy on the GPU.
 	resc : float
 	    Bin size of the coarse alignment, in voxels, and the starting match distance.
 	trim : int
@@ -29,7 +55,8 @@ class Aligner:
 	    If given, only points whose last column (the intensity ``h``) exceeds it are used.
 	"""
 	def __init__(self, X_ref, resc=5, trim=10, th=None):
-		self.xp = cp.get_array_module(X_ref)
+		self.xp = get_array_module(X_ref)
+		KDTree, self.fftconvolve = _backend(self.xp)
 		self.resc = resc
 		self.trim = trim
 		self.th = th
@@ -38,7 +65,7 @@ class Aligner:
 		if th:
 			X_ref = self.threshold(X_ref)
 
-		# unlike scipy the cupy KDTree crashes if given no points, so catch it here
+		# the cupy KDTree crashes if given no points, so refuse them here for both backends
 		if X_ref.size == 0:
 			raise ValueError(
 				"No points left after thresholding; cannot build KDTree. "
@@ -160,11 +187,10 @@ class Aligner:
 		# Image for FFT correlation
 		im, Xm = self.get_im_from_Xh(X)
 
-		# Pure-CuPy FFT correlation
-		im_cor = fftconvolve(im, self.im_ref[::-1, ::-1, ::-1])
-		im_cor_shape = xp.asarray(im_cor.shape)
+		# FFT correlation
+		im_cor = self.fftconvolve(im, self.im_ref[::-1, ::-1, ::-1])
 		im_ref_shape = xp.asarray(self.im_ref.shape)
-		tzxy = xp.array(xp.unravel_index(xp.argmax(im_cor), im_cor_shape)) - im_ref_shape + 1 + Xm - self.Xm_ref
+		tzxy = xp.array(xp.unravel_index(xp.argmax(im_cor), tuple(im_cor.shape))) - im_ref_shape + 1 + Xm - self.Xm_ref
 		tzxy = tzxy * self.resc
 
 		# Refinement
@@ -178,7 +204,7 @@ class Aligner:
 	def threshold(self, X):
 		"""Keep the points whose last column exceeds ``th``. Returns an empty ``(0, dim)`` array if none do.
 		"""
-		xp = cp.get_array_module(X)
+		xp = get_array_module(X)
 		th = self.th
 		dim = X.shape[1]
 		if X.size:
@@ -198,7 +224,7 @@ class DualAligner:
 	    Intensity threshold passed to the two :class:`Aligner` objects.
 	"""
 	def __init__(self, ref, th=None):
-		self.xp = cp.get_array_module(ref)
+		self.xp = get_array_module(ref.Xh_plus)
 		self.plus = Aligner(ref.Xh_plus[:,:3], th = th)
 		self.minus = Aligner(ref.Xh_minus[:,:3], th = th)
 		self.th = th
@@ -256,15 +282,37 @@ def drift_save(data, filepath):
 		if os.path.exists(tmp):
 			os.remove(tmp)
 
-def drift(block):
-	"""Compute the drift of every image of a field of view relative to its middle round.
+def snapshot(image):
+	"""What the drift needs of an image, as numpy: ``path``, ``ih``, ``Xh_plus`` and ``Xh_minus``.
 
+	Taken in the main thread so the drift can run in the background after the image is gone.
+	"""
+	from types import SimpleNamespace
+	return SimpleNamespace(path=image.path, ih=getattr(image, "ih", None),
+	                       Xh_plus=to_numpy(image.Xh_plus), Xh_minus=to_numpy(image.Xh_minus))
+
+
+def drift_rounds(ref, images, th=4):
+	"""Drift of each of ``images`` relative to ``ref``, all with ``Xh_plus`` and ``Xh_minus``.
+
+	Returns one ``(tzxyf, tzxy_plus, tzxy_minus, N_plus, N_minus)`` tuple per image, see
+	:meth:`DualAligner.get_best_translation_pointsV2`. ``ref`` itself gives a drift of zero.
+	"""
+	dual = DualAligner(ref, th=th)
+	return [dual.get_best_translation_pointsV2(image) for image in images]
+
+
+def drift(block):
+	"""Compute the drift of every image of a field of view relative to its first round.
+
+	The reference is the first round, so the drift of a round only needs that round and the
+	first one, and can be computed as soon as both are fitted. Runs on the CPU.
 	Nothing is computed if the drift file of the block exists.
 
 	Parameters
 	----------
 	block : mermake.io.queue.Block
-	    The images of one field of view, with ``Xh_plus`` and ``Xh_minus`` set.
+	    The images of one field of view in round order, with ``Xh_plus`` and ``Xh_minus`` set.
 
 	Returns
 	-------
@@ -277,13 +325,109 @@ def drift(block):
 	ifov = block.ifov()
 	filepath = block.drift_file()
 	if not os.path.exists(filepath):
-		ref = block[len(block)//2]
-		dual = DualAligner(ref, th=4)
-		drifts = []
-		files = []
-		for image in block:
-			drift = dual.get_best_translation_pointsV2(image)
-			drifts.append(drift)
-			files.append(os.path.dirname(image.path))
-		return [drifts, files, ifov, ref.path] , filepath
+		images = [snapshot(image) for image in block]
+		drifts = drift_rounds(images[0], images)
+		return [drifts, [os.path.dirname(image.path) for image in images], ifov, images[0].path], filepath
 
+
+def save_drift(images, iset, ifov, drift_file, output_folder, output_format, complete=True):
+	"""Compute and write the drift of a field of view that is not on disk yet.
+
+	Parameters
+	----------
+	images : list
+	    :func:`snapshot` of the fitted rounds in round order. The first is the reference, so it
+	    must be the first round of the field of view.
+	complete : bool
+	    Whether ``images`` holds every round. The pickle ``drift_file`` is only written then; with
+	    the parquet format each round also gets its own row in ``drift.parquet`` as soon as it is
+	    fitted.
+
+	Returns
+	-------
+	int
+	    The number of rounds whose drift was computed.
+	"""
+	from .io import spots
+	ref = images[0]
+	parquet = output_format in ("parquet", "both")
+	todo = [im for im in images if not (parquet and spots.drift_exists(output_folder, iset, ifov, im.ih))]
+	write_pickle = complete and not os.path.exists(drift_file)
+	if write_pickle:
+		todo = images
+	if not todo:
+		return 0
+	results = drift_rounds(ref, todo)
+	if parquet:
+		for image, result in zip(todo, results):
+			spots.write_drift(output_folder, iset, ifov, image.ih, ref.ih, result)
+	if write_pickle:
+		drift_save([results, [os.path.dirname(im.path) for im in todo], ifov, ref.path], drift_file)
+	return len(todo)
+
+
+def load_dapi_maxima(path, iset, ifov, paths, output_format):
+	"""The saved dapi maxima of the image at ``path`` as a :func:`snapshot`, or ``None`` if not fitted yet."""
+	from types import SimpleNamespace
+	from .io import spots
+	from .io.naming import get_ih
+	ih = get_ih(os.path.dirname(path))
+	if output_format in ("parquet", "both"):
+		if not spots.spots_exist(paths.output_folder, iset, ifov, ih, -1):
+			return None
+		parts = spots.read_spots(paths.output_folder, iset, ifov, ih, -1)
+		plus, minus = parts[spots.KIND_DAPI_PLUS], parts[spots.KIND_DAPI_MINUS]
+	else:
+		name = paths.dapi_save.format(fov=Path(path).stem, tag=Path(path).parent.name)
+		npz = os.path.join(paths.output_folder, name)
+		if not os.path.exists(npz):
+			return None
+		with np.load(npz) as data:
+			plus, minus = data["Xh_plus"], data["Xh_minus"]
+	return SimpleNamespace(path=path, ih=ih, Xh_plus=plus, Xh_minus=minus)
+
+
+def _drift_fov(iset, ifov, files, paths, output_format):
+	"""``mermake --drift`` for one field of view: ``(rounds computed, whether it waits for its first round)``."""
+	from .io import spots
+	from .io.naming import get_ih
+	files = sorted(files, key=lambda f: get_ih(os.path.dirname(f)))
+	drift_file = os.path.join(paths.output_folder, paths.drift_save.format(ifov=ifov, fov=Path(files[0]).stem, iset=iset))
+	if os.path.exists(drift_file) and (output_format == "npz" or all(
+			spots.drift_exists(paths.output_folder, iset, ifov, get_ih(os.path.dirname(f))) for f in files)):
+		return 0, False   # finished earlier: do not read its maxima again
+	images = [load_dapi_maxima(f, iset, ifov, paths, output_format) for f in files]
+	if images[0] is None:
+		return 0, True
+	fitted = [im for im in images if im is not None]
+	return save_drift(fitted, iset, ifov, drift_file, paths.output_folder, output_format,
+	                  complete=len(fitted) == len(images)), False
+
+
+def run_drift(config, shard=None, jobs=None):
+	"""``mermake --drift``: compute the drift of every fitted round from the saved dapi maxima.
+
+	Reads only the results in the output folder (and lists the image folders to know the rounds),
+	never the images, and needs no GPU. Rounds whose drift is on disk are skipped, so it can be run
+	again while an acquisition or a run is still going: a round is aligned as soon as it and the
+	first round of its field of view are fitted. The fields of view are shared out over ``jobs``
+	processes (default: one per core); each takes about 1-2 s of CPU per round.
+	"""
+	from concurrent.futures import ProcessPoolExecutor
+	from .io.naming import FolderFilter, shard_matches
+	paths, output_format = config.paths, config.output.format
+	fov_min, fov_max = (-float("inf"), float("inf"))
+	if paths.fov_range:
+		fov_min, fov_max = map(float, paths.fov_range.split(":"))
+	matches = shard_matches(FolderFilter(paths.hyb_range, paths.regex, fov_min, fov_max).get_matches(paths.hyb_folders), shard)
+	keys = sorted(matches)
+	jobs = jobs or os.cpu_count() or 1
+	with ProcessPoolExecutor(max_workers=min(jobs, max(1, len(keys)))) as pool:
+		results = list(pool.map(_drift_fov, *zip(*[(iset, ifov, matches[(iset, ifov)], paths, output_format)
+		                                             for iset, ifov in keys]))) if keys else []
+	rounds = sum(n for n, _ in results)
+	done = sum(1 for n, _ in results if n)
+	waiting = sum(1 for _, w in results if w)
+	print(f"drift: {rounds} rounds of {done} fields of view computed; {waiting} of {len(matches)} fields of view "
+	      f"wait for their first round", flush=True)
+	return rounds

@@ -363,3 +363,52 @@ def test_real_fft_off_gives_the_same_spots(tmp_path):
 			assert distance.max() < 1e-3
 			assert len(set(match)) == len(ia)  # one to one
 			np.testing.assert_allclose(a.column("h").to_numpy()[ia], b.column("h").to_numpy()[ib][match], rtol=1e-3)
+
+
+@pytest.mark.parametrize("shape", [(40, 300, 280), (12, 96, 96), (3, 5)])
+def test_dapi_sum_of_squares_matches_the_norm_it_replaced(shape):
+	"""``_sum_sq`` gives the std of ``cp.linalg.norm`` (to float32 rounding) without an image-sized temporary."""
+	import cupy as cp
+	from mermake.pipeline import _sum_sq
+	x = cp.random.default_rng(0).standard_normal(shape, dtype=cp.float32) * 50 + 3
+	old = float(cp.linalg.norm(x.ravel()) / cp.sqrt(x.size))
+	new = float(cp.sqrt(_sum_sq(x)) / cp.sqrt(x.size))
+	assert new == pytest.approx(old, rel=1e-6)
+	if x.size < 10**6:
+		return
+	pool = cp.get_default_memory_pool()
+	pool.free_all_blocks()
+	before = pool.total_bytes()
+	_sum_sq(x)
+	assert pool.total_bytes() - before < x.nbytes / 2
+
+
+def test_reference_run_wrote_the_drift_parquet(three_fovs):
+	_, _, ref = three_fovs
+	from mermake.io import spots
+	table = spots.open_dataset(str(ref), spots.DRIFT_DIR).to_table()
+	assert table.num_rows == 3   # one round per fov in this data
+	assert set(table.column("ref_ih").to_pylist()) == {1}
+	for name in ("dz", "dx", "dy"):   # a round against itself
+		assert np.allclose(table.column(name).to_numpy(), 0)
+
+
+def test_drift_command_redoes_the_drift_from_the_saved_maxima(three_fovs):
+	import pickle
+	import shutil
+	root, _, ref = three_fovs
+	out = root / "out_drift"
+	shutil.copytree(ref, out)
+	shutil.rmtree(out / "drift.parquet")
+	for path in out.glob("drift_*.pkl"):
+		path.unlink()
+	settings = settings_for(root, "out_drift")
+	proc = mermake(settings, "--drift")
+	assert proc.returncode == 0, proc.stderr[-2000:]
+	assert "3 rounds of 3 fields of view" in proc.stdout
+	for path in ref.glob("drift_*.pkl"):
+		with open(path, "rb") as a, open(out / path.name, "rb") as b:
+			old, new = pickle.load(a), pickle.load(b)
+		assert np.allclose(old[0][0][0], new[0][0][0]) and old[1:] == new[1:]
+	again = mermake(settings, "--drift")
+	assert "0 rounds of 0 fields of view" in again.stdout

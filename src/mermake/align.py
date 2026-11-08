@@ -414,8 +414,10 @@ def run_drift(config, shard=None, jobs=None):
 	processes (default: one per core); each takes about 1-2 s of CPU per round.
 	"""
 	from concurrent.futures import ProcessPoolExecutor
+	from .io import storage
 	from .io.naming import FolderFilter, shard_matches
 	paths, output_format = config.paths, config.output.format
+	storage.configure(paths.storage_options)
 	fov_min, fov_max = (-float("inf"), float("inf"))
 	if paths.fov_range:
 		fov_min, fov_max = map(float, paths.fov_range.split(":"))

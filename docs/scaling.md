@@ -105,6 +105,17 @@ What changed in the defaults, which does change the results a little:
 
 **The storage may be the limit before the GPU is.** On the machine these numbers come from, the input (a FUSE mount) delivered about 135-150 MB/s in total, however many processes read at the same time (one process: 153 MB/s, two: 66 and 70, four: 33-35 each). An image is 0.8 GB, so the most that machine can read is one image every 6 seconds, which is already close to the 8.1 s the GPU needs. Decompressing is cheap (0.3 s for an image) and squaring to uint16 takes 1 s. If that is true of your cluster, more GPUs will not help beyond the point where they read as fast as the storage delivers. Below that point, two settings get more out of storage with a high cost per request (each read of a FUSE mount of S3 took about 0.25 s, whatever its size): `--read-threads` to keep more requests in flight than the machine has cores, and `--overlap-channels` to read the channels of an image together instead of one after the other. Check with `scripts/bench_read.py`: run it on one field of view, then on several at once (`... & ... & wait`) and see whether the total grows.
 
+**Reading straight from S3 removes that limit.** The FUSE mount above was a Code Ocean data asset backed by S3. Read directly from its bucket (`hyb_folders = ["s3://..."]`, same region, a g4dn.4xlarge), the same images came in far faster:
+
+| Reader | Requests at once | MB/s | Images per minute |
+|---|---:|---:|---:|
+| FUSE mount, 16 threads | 16 | 137 | 9.7 |
+| `dask.array.from_zarr` on s3fs, decompression included (what mermake does) | 16 / 64 | 250 / 285 | 17 / 20 |
+| s3fs alone | 32-256 | about 370 | 26 |
+| obstore (not used by mermake) | 64 / 256 | 1470 / 2410 | 105 / 172 |
+
+One process reading with s3fs keeps any single GPU fed (a T4 needs 7.4 images per minute, an A10G 14.7). s3fs stops at about 370 MB/s per process, but every worker is its own process, so the total grows with the workers. Reading took 2-5 s of CPU per image. A small read took about 120 ms, against 250-480 ms through the mount.
+
 To measure your own run:
 
 ```bash

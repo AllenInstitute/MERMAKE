@@ -115,6 +115,8 @@ def sample(args, n_images=3, seed=0, floor_sigmas=4.0, dapi_floor=1.5, log=print
 
 	build_config(args)
 	paths = args.paths
+	from .io import storage
+	storage.configure(getattr(paths, "storage_options", None))
 	fov_min, fov_max = (-float("inf"), float("inf"))
 	if paths.fov_range:
 		fov_min, fov_max = map(float, paths.fov_range.split(":"))

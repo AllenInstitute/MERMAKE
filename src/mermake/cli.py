@@ -120,8 +120,10 @@ def effective_gpus(args):
 
 def dry_run(config, shard=None, gpus=None, prefetch=None, read_threads=None, overlap_channels=None):
 	"""Print what a run would process. Needs no GPU."""
+	from .io import storage
 	from .io.naming import FolderFilter, shard_matches
 	paths = config.paths
+	storage.configure(paths.storage_options)
 	fov_min, fov_max = (-float('inf'), float('inf'))
 	if paths.fov_range:
 		fov_min, fov_max = map(float, paths.fov_range.split(':'))

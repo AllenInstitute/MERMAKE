@@ -59,6 +59,14 @@ The command line wins over the file, and the file over the defaults.
 | `--read-threads N` | `read_threads` | threads each worker reads and decompresses chunks with. Not set: the cores of the machine, split between the workers. Reading mostly waits on the storage, so on storage with a high cost per request (a FUSE mount of S3) more threads than cores read faster, up to what the storage delivers |
 | `--overlap-channels` | `overlap_channels` | read all the channels of an image at once instead of one after the other (default `false`), so the storage is not left idle at the end of each channel. While an image is read it can hold up to one more image of RAM |
 
+### Images in object storage
+
+`hyb_folders` can name a folder in object storage instead of a local one, for example `hyb_folders = ["s3://my-bucket/experiment"]`. mermake then lists and reads the images directly, without a mount. This needs the `s3` extra (`pip install 'mermake[s3]'` or `uv sync --extra s3`). Only the images are read this way: `psf_file`, `flat_field_tag` and `output_folder` stay local.
+
+- **Credentials** come from the usual AWS chain: the `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` environment variables, `~/.aws`, or the role of the machine. `[paths] storage_options` is passed to fsspec as is, for example `storage_options = {profile = "mylab"}`. Do not put keys in the settings file. Only the names of these options are saved with the results.
+- **Read threads.** Object storage serves many requests at once, each taking about 0.1-0.2 s, so set `read_threads = 64` or so. mermake sizes the connection pool to match.
+- **Temporary credentials** expire, often after an hour or a few. In a run that outlives them, every image after that point fails with a `Warning: failed to read ...` line and is skipped. Run again with fresh credentials: finished images are not redone, so only the skipped ones are processed.
+
 `--check` and `--suggest-threshold` work in one process and ignore `gpus`. `mermake --dry-run` says how the run would use the machine. See [several GPUs and nodes](scaling.md).
 
 ## Reference

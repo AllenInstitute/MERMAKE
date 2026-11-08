@@ -19,6 +19,7 @@ from dataclasses import dataclass, field, fields, is_dataclass, MISSING
 from types import SimpleNamespace
 from typing import List, Optional, Union
 
+from .io import storage
 from .io.naming import FolderFilter
 
 if sys.version_info >= (3, 11):
@@ -51,7 +52,9 @@ class Paths:
 		"2D array or a `.npz` with key `im`, one per color channel), box blurred and divided by its median.")
 	hyb_folders: List[str] = _f(
 		"Directories to search. Each holds one sub-directory per hybridization round, which in "
-		"turn holds one `.zarr` per field of view.")
+		"turn holds one `.zarr` per field of view. An entry can also be a URL such as "
+		"`s3://bucket/prefix`, read directly from object storage (needs `pip install 'mermake[s3]'`; "
+		"see `storage_options`).")
 	hyb_range: str = _f(
 		"Rounds to process as `first:last`, written like the round folder names, e.g. "
 		"`H1_BICAN_set1:H16_BICAN_set1`. The round number and the set number are compared "
@@ -63,6 +66,11 @@ class Paths:
 	fov_range: Optional[str] = _f(
 		"Only process fields of view with index in `min:max` (inclusive), e.g. `0:10`. "
 		"Default: all.", default=None)
+	storage_options: Optional[dict] = _f(
+		"Advanced. Options for reading `hyb_folders` given as URLs, passed to fsspec (for `s3://`, to "
+		"s3fs), e.g. `{profile = \"mylab\"}` or `{anon = true}`. Not set: the usual AWS credentials (the "
+		"`AWS_*` environment variables, `~/.aws`, or the machine's role). Do not put keys here: only "
+		"the names of these options are saved with the results.", default=None)
 	sum_channels: Optional[List[int]] = _f(
 		"Advanced. Two channel indices (0-based, in the order the channels are stored, before any "
 		"are merged) whose images are summed into one channel when an image is read. For "
@@ -334,7 +342,7 @@ def _type_name(tp):
 		return " or ".join(_type_name(a) for a in typing.get_args(tp) if a is not type(None))
 	if typing.get_origin(tp) in (list, List):
 		return f"list of {_type_name(typing.get_args(tp)[0])}s"
-	return {bool: "true or false", int: "integer", float: "number", str: "string"}[tp]
+	return {bool: "true or false", int: "integer", float: "number", str: "string", dict: "table"}[tp]
 
 
 def _toml_value(value):
@@ -346,6 +354,8 @@ def _toml_value(value):
 		return "true" if value else "false"
 	if isinstance(value, list):
 		return "[" + ", ".join(_toml_value(v) for v in value) + "]"
+	if isinstance(value, dict):
+		return "{" + ", ".join(f"{k} = {_toml_value(v)}" for k, v in value.items()) + "}"
 	return repr(value)
 
 
@@ -392,6 +402,10 @@ def _coerce(value, tp):
 		if not isinstance(value, str):
 			raise TypeError("a string")
 		return value
+	if tp is dict:
+		if not isinstance(value, dict):
+			raise TypeError("a table")
+		return dict(value)
 	raise AssertionError(tp)
 
 
@@ -458,6 +472,8 @@ def _check_run(r, errors):
 
 def _check_paths(p, base_dir, check_files, errors):
 	def resolve(path):
+		if storage.is_remote(path):
+			return path
 		path = os.path.expanduser(path)
 		if base_dir and not os.path.isabs(path):
 			path = os.path.join(base_dir, path)
@@ -467,13 +483,23 @@ def _check_paths(p, base_dir, check_files, errors):
 	p.flat_field_tag = resolve(p.flat_field_tag)
 	p.hyb_folders = [resolve(d) for d in p.hyb_folders]
 	p.output_folder = resolve(p.output_folder)
+	for key in ("psf_file", "flat_field_tag", "output_folder"):
+		if storage.is_remote(getattr(p, key)):
+			errors.append(f"[paths] {key} must be a local path; only hyb_folders can be a URL")
 	if check_files:
 		if not os.path.isfile(p.psf_file):
 			errors.append(f"[paths] psf_file '{p.psf_file}' does not exist")
 		if not glob.glob(p.flat_field_tag + "*"):
 			errors.append(f"[paths] flat_field_tag '{p.flat_field_tag}' matches no files")
 		for d in p.hyb_folders:
-			if not os.path.isdir(d):
+			if storage.is_remote(d):
+				storage.configure(p.storage_options)
+				try:
+					if not storage.isdir(d):
+						errors.append(f"[paths] hyb_folders entry '{d}' does not exist")
+				except (ImportError, PermissionError, OSError) as e:
+					errors.append(f"[paths] hyb_folders entry '{d}' cannot be read: {e}")
+			elif not os.path.isdir(d):
 				errors.append(f"[paths] hyb_folders entry '{d}' is not a directory")
 	try:
 		pattern = re.compile(p.regex)
@@ -518,7 +544,9 @@ def namespace_to_array(obj, prefix=''):
 	if isinstance(obj, dict):
 		for k, v in obj.items():
 			full_key = f"{prefix}.{k}" if prefix else k
-			if is_dataclass(v) or isinstance(v, (SimpleNamespace, dict)):
+			if k == "storage_options" and isinstance(v, dict):
+				rows.append((prefix, k, str(sorted(v))))   # the option names only: values can be credentials
+			elif is_dataclass(v) or isinstance(v, (SimpleNamespace, dict)):
 				rows.extend(namespace_to_array(v, prefix=full_key))
 			else:
 				rows.append((prefix, k, str(v)))

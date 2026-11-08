@@ -10,6 +10,7 @@ import cupy as cp
 from .. import __version__
 from .readers import read_im, Container, color_indices, dapi_index
 from .naming import get_ih, get_ifov, get_iset, FolderFilter, shard_matches
+from . import storage
 from ..config import namespace_to_array
 from . import spots
 
@@ -90,6 +91,7 @@ class ImageQueue:
 			self.overlap_channels = bool(getattr(run, 'overlap_channels', False))
 		self.__dict__.update(vars(args.paths))
 		self.output_format = args.settings.output.format
+		storage.configure(getattr(args.paths, 'storage_options', None), self.read_threads)
 
 		os.makedirs(self.output_folder, exist_ok = True)
 		
@@ -109,15 +111,16 @@ class ImageQueue:
 			self.summary = f"shard {shard[0]}/{shard[1]}: {len(selected)} of {len(matches)} fov groups\n" + self.summary
 
 		# Peek at first image to set shape/dtype
-		first_image = None
+		first_image, first_error = None, None
 		for path in chain.from_iterable(matches.values()):
 			try:
 				first_image = read_im(path, sum_channels=self.sum_channels)
 				break
-			except Exception:
+			except Exception as e:
+				first_error = first_error or f"{path}: {type(e).__name__}: {e}"
 				continue
 		if first_image is None:
-			raise RuntimeError("No valid images found.")
+			raise RuntimeError("No valid images found." + (f" The first one failed with {first_error}" if first_error else ""))
 		self.shape = first_image.shape
 		self.dtype = first_image.dtype
 	

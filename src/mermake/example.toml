@@ -1,0 +1,55 @@
+# Example mermake settings file. Relative paths are resolved against the folder
+# containing this file.
+#
+# Only [paths] is required. Every other setting has a default, so [hybs] and
+# [dapi] are only needed to override something. To see every setting with its
+# description and its current value, run `mermake --print-config this_file.toml`.
+
+[paths]
+# Point spread function, a .npy array with shape (z, y, x)
+psf_file = 'psfs/psf_750_Scope3_final.npy'
+# Prefix of the flat field files, every file matching 'flat_field/Scope3_*' is used
+flat_field_tag = 'flat_field/Scope3_'
+# Directories that contain one sub-directory per hybridization round. An entry can also be
+# a URL, read straight from object storage (needs `pip install 'mermake[s3]'`), e.g.
+# 's3://my-bucket/Tominersen_Human_05_09_2025'; then set [run] read_threads = 64.
+hyb_folders = ['Tominersen_Human_05_09_2025']
+# Rounds to process, written like the round folder names
+hyb_range = 'H1_BICAN_set1:H16_BICAN_set1'
+# Where the results go
+output_folder = 'MERFISH_Analysis_MERMAKE'
+# Optional: only process these fields of view (inclusive)
+fov_range = '0:1'
+# Optional: sum two channels that are two exposures of the same color
+#sum_channels = [0, 1]
+# Optional: index of the dapi channel after summing (default -1, the last channel)
+#dapi_channel = 0
+
+# Example overrides, uncomment to change:
+#[hybs]
+#threshold = 4000
+#
+#[dapi]
+#patch_size = 300
+
+# How to use the machine, for a job that cannot take a command line. The options --gpus, --prefetch,
+# --read-threads and --overlap-channels of the command line override these. One worker per GPU ('all',
+# '0,1' or [0, 1]), the images each worker reads ahead of the GPU, the threads each worker reads with
+# (default: the cores, split between the workers; more helps on slow network storage), and whether
+# the channels of an image are read at once (default false; it can hold one more image of RAM):
+#[run]
+#gpus = 'all'
+#prefetch = 3
+#read_threads = 16
+#overlap_channels = true
+
+# To get the results of version 0.1.0 or earlier back, set the following. The defaults are now
+# patch_overlap = 110 (it was 89) and real_fft = true, which make a run about twice as fast and
+# move about 0.4 % of the spots, those at the threshold. `mermake --print-config` says why:
+#[hybs]
+#patch_overlap = 89
+#real_fft = false
+#
+#[dapi]
+#patch_overlap = 89
+#real_fft = false

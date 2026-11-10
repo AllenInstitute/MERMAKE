@@ -1,7 +1,8 @@
 import pytest
+
+pytest.importorskip("cupy")
+pytestmark = pytest.mark.gpu
 import numpy as np
-from unittest.mock import Mock, patch, MagicMock
-import gc
 
 try:
 	import cupy as cp
@@ -10,10 +11,9 @@ except ImportError:
 	import numpy as cp
 	CUPY_AVAILABLE = False
 
-from mermake.io import read_im
+from mermake.io.readers import read_im
 
 from mermake.deconvolver import (
-	laplacian_3d, 
 	batch_laplacian_fft, 
 	repeat_last, 
 	Deconvolver, 
@@ -85,14 +85,14 @@ class TestDeconvolverInitialization:
 		deconv = Deconvolver(
 			psfs=sample_psf,
 			channel_shape=sample_image_shape,
-			tile_size=50,
+			patch_size=50,
 			zpad=5,
-			overlap=10,
+			patch_overlap=10,
 			beta=0.001
 		)
 		
-		assert deconv.tile_size == 50
-		assert deconv.overlap == 10
+		assert deconv.patch_size == 50
+		assert deconv.patch_overlap == 10
 		assert deconv.zpad == 5
 		assert deconv.psf_fft is not None
 	
@@ -107,33 +107,33 @@ class TestDeconvolverInitialization:
 		deconv = Deconvolver(
 			psfs=psfs_dict,
 			channel_shape=sample_image_shape,
-			tile_size=50,
-			overlap=10,
+			patch_size=50,
+			patch_overlap=10,
 			beta=0.001
 		)
 		
 		assert len(deconv.psf_fft) == 3
 	
 	def test_deconvolver_memory_allocation(self, sample_psf, sample_image_shape):
-		"""Test that Deconvolver properly allocates memory for tiles."""
-		tile_size = 50
-		overlap = 10
+		"""Test that Deconvolver properly allocates memory for patches."""
+		patch_size = 50
+		patch_overlap = 10
 		zpad = 5
 		
 		deconv = Deconvolver(
 			psfs=sample_psf,
 			channel_shape=sample_image_shape,
-			tile_size=tile_size,
+			patch_size=patch_size,
 			zpad=zpad,
-			overlap=overlap
+			patch_overlap=patch_overlap
 		)
 		
-		expected_tile_shape = (tile_size + 2*overlap, tile_size + 2*overlap)
-		expected_pad_shape = (2*zpad + sample_image_shape[0], *expected_tile_shape)
-		expected_res_shape = (sample_image_shape[0], *expected_tile_shape)
+		expected_patch_shape = (patch_size + 2*patch_overlap, patch_size + 2*patch_overlap)
+		expected_pad_shape = (2*zpad + sample_image_shape[0], *expected_patch_shape)
+		expected_res_shape = (sample_image_shape[0], *expected_patch_shape)
 		
-		assert deconv.tile_pad.shape == expected_pad_shape
-		assert deconv.tile_res.shape == expected_res_shape
+		assert deconv.patch_pad.shape == expected_pad_shape
+		assert deconv.patch_res.shape == expected_res_shape
 
 
 class TestDeconvolverMethods:
@@ -149,9 +149,9 @@ class TestDeconvolverMethods:
 		return Deconvolver(
 			psfs=psf,
 			channel_shape=channel_shape,
-			tile_size=50,
+			patch_size=50,
 			zpad=5,
-			overlap=10,
+			patch_overlap=10,
 			beta=0.001
 		)
 	
@@ -181,39 +181,39 @@ class TestDeconvolverMethods:
 		assert result.shape == (20, 50, 50)
 		assert np.allclose(result.sum(), 1.0)  # Should be normalized
 	
-	def test_tiled_basic(self, deconv_instance):
+	def test_patched_basic(self, deconv_instance):
 		"""Test basic tiling functionality."""
 		image = np.random.random((20, 100, 100))
 		
-		tiles = list(deconv_instance.tiled(image))
+		patches = list(deconv_instance.patched(image))
 		
-		# Should have 4 tiles (2x2 grid for 100x100 image with tile_size=50)
-		assert len(tiles) == 4
+		# Should have 4 patches (2x2 grid for 100x100 image with patch_size=50)
+		assert len(patches) == 4
 		
-		# Check tile positions
-		positions = [(x, y) for x, y, _ in tiles]
+		# Check patch positions
+		positions = [(x, y) for x, y, _ in patches]
 		expected_positions = [(0, 0), (0, 50), (50, 0), (50, 50)]
 		assert positions == expected_positions
 	
-	def test_tiled_with_overlap(self, deconv_instance):
-		"""Test that tiles include proper overlap."""
+	def test_patched_with_overlap(self, deconv_instance):
+		"""Test that patches include proper patch_overlap."""
 		image = np.random.random((20, 100, 100))
 		
-		overlap = deconv_instance.overlap
-		tile_size = deconv_instance.tile_size
-		for x, y, tile in deconv_instance.tiled(image):
-			zdim,xdim,ydim = tile.shape
-			xstart = 0 if x == 0 else overlap
-			ystart = 0 if y == 0 else overlap
-			xend = xdim if xdim < tile_size else tile_size
-			yend = ydim if ydim < tile_size else tile_size
-			# First tile should include overlap on right and bottom
+		patch_overlap = deconv_instance.patch_overlap
+		patch_size = deconv_instance.patch_size
+		for x, y, patch in deconv_instance.patched(image):
+			zdim,xdim,ydim = patch.shape
+			xstart = 0 if x == 0 else patch_overlap
+			ystart = 0 if y == 0 else patch_overlap
+			xend = xdim if xdim < patch_size else patch_size
+			yend = ydim if ydim < patch_size else patch_size
+			# First patch should include patch_overlap on right and bottom
 			if x == 0 and y == 0:
-				assert tile.shape == (20, 60, 60)  # 50 + 10 overlap
-			# Check that tile data matches original image
-			#assert np.array_equal(tile[:,overlap:-overlap,overlap:-overlap], image[:, x:x+tile_size, y:y+tile_size]), f"x={x},y={y}"
-			sub = tile[:,xstart:xstart+xend, ystart:ystart+yend]
-			ref = image[:, x:x+tile_size, y:y+tile_size]
+				assert patch.shape == (20, 60, 60)  # 50 + 10 patch_overlap
+			# Check that patch data matches original image
+			#assert np.array_equal(patch[:,patch_overlap:-patch_overlap,patch_overlap:-patch_overlap], image[:, x:x+patch_size, y:y+patch_size]), f"x={x},y={y}"
+			sub = patch[:,xstart:xstart+xend, ystart:ystart+yend]
+			ref = image[:, x:x+patch_size, y:y+patch_size]
 			assert sub.shape == ref.shape
 			assert np.array_equal(sub, ref), f"x={x},y={y}"
 
@@ -241,8 +241,8 @@ class TestDeconvolverProcessing:
 		deconv = Deconvolver(
 			psfs=psf,
 			channel_shape=image.shape,
-			tile_size=30,
-			overlap=5,
+			patch_size=30,
+			patch_overlap=5,
 			zpad=2,
 			beta=0.001
 		)
@@ -261,8 +261,8 @@ class TestDeconvolverProcessing:
 		deconv = Deconvolver(
 			psfs=psf,
 			channel_shape=image.shape,
-			tile_size=30,
-			overlap=5,
+			patch_size=30,
+			patch_overlap=5,
 			zpad=2
 		)
 		
@@ -282,8 +282,8 @@ class TestDeconvolverProcessing:
 		deconv = Deconvolver(
 			psfs=psf,
 			channel_shape=image.shape,
-			tile_size=30,
-			overlap=5,
+			patch_size=30,
+			patch_overlap=5,
 			zpad=2
 		)
 		
@@ -306,16 +306,16 @@ class TestDeconvolverEdgeCases:
 		deconv = Deconvolver(
 			psfs=psf,
 			channel_shape=image.shape,
-			tile_size=15,  # Smaller than image
-			overlap=2,
+			patch_size=15,  # Smaller than image
+			patch_overlap=2,
 			zpad=1
 		)
 		
 		result = deconv.apply(image)
 		assert result.shape == image.shape
 	
-	def test_single_tile_image(self):
-		"""Test with image that fits in a single tile."""
+	def test_single_patch_image(self):
+		"""Test with image that fits in a single patch."""
 		image = cp.random.random((10, 30, 30))
 		psf = np.zeros((5, 5, 5))
 		psf[2, 2, 2] = 1.0
@@ -324,8 +324,8 @@ class TestDeconvolverEdgeCases:
 		deconv = Deconvolver(
 			psfs=psf,
 			channel_shape=image.shape,
-			tile_size=50,  # Larger than image
-			overlap=5,
+			patch_size=50,  # Larger than image
+			patch_overlap=5,
 			zpad=2
 		)
 		
@@ -350,8 +350,8 @@ class TestCuPySpecific:
 		deconv = Deconvolver(
 			psfs=psf,
 			channel_shape=image.shape,
-			tile_size=30,
-			overlap=5,
+			patch_size=30,
+			patch_overlap=5,
 			zpad=2,
 			xp=cp
 		)
@@ -379,8 +379,8 @@ class TestFullDeconv:
 		result = full_deconv(
 			image=image,
 			psfs=psf,
-			tile_size=30,
-			overlap=5,
+			patch_size=30,
+			patch_overlap=5,
 			beta=0.001
 		)
 		
@@ -398,9 +398,9 @@ class TestFullDeconv:
 			image=image,
 			psfs=psf,
 			flat_field=flat_field,
-			tile_size=30,
+			patch_size=30,
 			zpad=5,
-			overlap=5,
+			patch_overlap=5,
 			beta=0.01
 		)
 		
@@ -414,7 +414,7 @@ class TestFullDeconv:
 		psf[2, 2, 2] = 1.0
 		
 		# This should not raise memory errors and should clean up
-		result = full_deconv(image=image, psfs=psf, tile_size=30)
+		result = full_deconv(image=image, psfs=psf, patch_size=30)
 		
 		assert result is not None
 		assert result.shape == image.shape
@@ -424,7 +424,7 @@ class TestFullDeconv:
 		cim = cp.asarray(image[0])
 
 		psfs = np.load('tests/examples/psf_750_Scope0_final.npy')
-		result = full_deconv(image=cim, psfs=psfs, tile_size=300, overlap=89)
+		result = full_deconv(image=cim, psfs=psfs, patch_size=300, patch_overlap=89)
 
 		expected = cp.zeros([35,1200,1200], dtype=cp.float16)
 		for z in range(35):
@@ -436,7 +436,10 @@ class TestFullDeconv:
 		# effectively demanded bit-identical output and broke whenever the CuPy/CUDA
 		# build changed. atol=2 covers last-bit quantization; rtol=1e-2 covers the small
 		# proportional drift from FFT/library version differences.
-		cp.testing.assert_allclose(result.astype(cp.float16), expected, rtol=1e-2, atol=2)
+		# The stored planes were made before the odd-size PSF roll was fixed, so they are shifted
+		# by one plane in z (expected[z] is the deconvolution of plane z - 1). Compare with that
+		# offset; plane 0 of the result has no counterpart. Regenerate the files to drop this.
+		cp.testing.assert_allclose(result[:-1].astype(cp.float16), expected[1:], rtol=1e-2, atol=2)
 
 
 class TestIntegrationAndPerformance:
@@ -455,7 +458,7 @@ class TestIntegrationAndPerformance:
 		result = full_deconv(
 			image=image,
 			psfs=psf,
-			tile_size=30,
+			patch_size=30,
 			beta=0.001  # Low regularization
 		)
 		
@@ -473,7 +476,7 @@ class TestIntegrationAndPerformance:
 		psf_single = np.zeros((5, 5, 5))
 		psf_single[2, 2, 2] = 1.0
 		
-		result1 = full_deconv(image=image, psfs=psf_single, tile_size=30)
+		result1 = full_deconv(image=image, psfs=psf_single, patch_size=30)
 		
 		# Dictionary of PSFs
 		psfs_dict = {
@@ -481,7 +484,7 @@ class TestIntegrationAndPerformance:
 			'corner': psf_single * 0.9
 		}
 		
-		result2 = full_deconv(image=image, psfs=psfs_dict, tile_size=30)
+		result2 = full_deconv(image=image, psfs=psfs_dict, patch_size=30)
 		
 		assert result1.shape == result2.shape == image.shape
 		# Results should be different due to different PSF handling
@@ -500,10 +503,10 @@ class TestMockDependencies:
 		psf[1, 1, 1] = 1.0
 		
 		# This should work even with mocked CuPy
-		result = full_deconv(image=image, psfs=psf, tile_size=15)
+		result = full_deconv(image=image, psfs=psf, patch_size=15)
 		assert result.shape == image.shape
 	
-	@patch('mermake.blur.box_1d')
+	@patch('mermake.gpu.blur.box_1d')
 	def test_with_mocked_blur(self, mock_blur):
 		"""Test with mocked blur function."""
 		mock_blur.return_value = None  # blur modifies in-place
@@ -515,7 +518,7 @@ class TestMockDependencies:
 		result = full_deconv(
 			image=image, 
 			psfs=psf, 
-			tile_size=15,
+			patch_size=15,
 			blur_radius=2  # This should trigger the blur calls
 		)
 		
@@ -526,3 +529,99 @@ class TestMockDependencies:
 
 if __name__ == "__main__":
 	pytest.main([__file__, "-v"])
+
+
+class TestPositionPreserved:
+	"""Deconvolution must not move features, whatever the parity of the padded sizes.
+
+	The padded PSF is rolled so its peak (at n // 2) sits at index 0. An off-by-one there
+	shifted the result by a voxel along every axis whose padded length is odd.
+	"""
+
+	IMAGE_XY = 40  # larger than patch_size, so the image is made of several patches
+
+	@staticmethod
+	def psf():
+		zz, yy, xx = np.meshgrid(np.arange(-3, 3), np.arange(-5, 5), np.arange(-5, 5), indexing="ij")
+		psf = np.exp(-(zz**2 / 2.0 + (yy**2 + xx**2) / (2 * 1.5**2))).astype(np.float32)
+		return psf / psf.sum()
+
+	# padded z is depth + 2*zpad = 3*depth - 2, so odd for odd depth; padded xy is
+	# patch_size + 2*patch_overlap, so odd for odd patch_size
+	@pytest.mark.parametrize("depth", [11, 12])
+	@pytest.mark.parametrize("patch_size", [24, 25])
+	def test_peak_stays_put(self, depth, patch_size):
+		n = self.IMAGE_XY
+		spot = (depth // 2, 30, 12)  # second patch in x, first in y
+		image = cp.zeros((depth, n, n), dtype=cp.float32)
+		image[spot] = 1000.0
+		deconv = Deconvolver(self.psf(), image.shape, patch_size=patch_size, zpad=depth - 1,
+		                     patch_overlap=8, beta=0.0001)
+		out = deconv.apply(image)
+		assert np.unravel_index(int(cp.argmax(out)), out.shape) == spot
+
+
+class TestRealFft:
+	"""``real_fft`` only changes how the FFTs are done: the patches and the PSF are real."""
+
+	@staticmethod
+	def psf():
+		zz, yy, xx = np.meshgrid(np.arange(-3, 3), np.arange(-5, 5), np.arange(-5, 5), indexing="ij")
+		psf = np.exp(-(zz**2 / 2.0 + (yy**2 + xx**2) / (2 * 1.5**2))).astype(np.float32)
+		return psf / psf.sum()
+
+	@staticmethod
+	def image(depth, ny, nx, seed=0):
+		rng = np.random.default_rng(seed)
+		image = rng.uniform(100, 140, (depth, ny, nx)).astype(np.float32)
+		for _ in range(12):
+			z, y, x = rng.integers(2, depth - 2), rng.integers(3, ny - 3), rng.integers(3, nx - 3)
+			image[z, y, x] += 3000
+		return cp.asarray(image)
+
+	def test_is_the_default(self):
+		assert Deconvolver(self.psf(), (6, 40, 40), patch_size=24, zpad=5, patch_overlap=8).real_fft is True
+
+	def test_the_buffers_hold_half_of_the_spectrum(self):
+		args = dict(psfs=self.psf(), channel_shape=(6, 40, 40), patch_size=24, zpad=5, patch_overlap=8)
+		real, full = Deconvolver(real_fft=True, **args), Deconvolver(real_fft=False, **args)
+		n = 24 + 2 * 8
+		assert real.psf_fft.shape == (1, 6 + 2 * 5, n, n // 2 + 1)
+		assert full.psf_fft.shape == (1, 6 + 2 * 5, n, n)
+		assert real.patch_fft.shape == (6 + 2 * 5, n, n // 2 + 1) and full.patch_fft.shape == (6 + 2 * 5, n, n)
+		assert real.psf_fft.nbytes + real.patch_fft.nbytes < 0.6 * (full.psf_fft.nbytes + full.patch_fft.nbytes)
+
+	def test_the_spectrum_is_the_half_of_the_complex_one(self):
+		args = dict(psfs=self.psf(), channel_shape=(6, 40, 40), patch_size=24, zpad=5, patch_overlap=8, beta=0.001)
+		real, full = Deconvolver(real_fft=True, **args), Deconvolver(real_fft=False, **args)
+		half = full.psf_fft[..., :real.psf_fft.shape[-1]]
+		assert float(cp.max(cp.abs(real.psf_fft - half))) < 1e-5 * float(cp.max(cp.abs(half)))
+
+	# every parity of the padded sizes: xy is patch_size + 2 * patch_overlap, z is depth + 2 * zpad
+	@pytest.mark.parametrize("depth", [7, 8])
+	@pytest.mark.parametrize("patch_size", [24, 25])
+	@pytest.mark.parametrize("patch_overlap", [8, 9])
+	def test_same_result_as_complex_fft(self, depth, patch_size, patch_overlap):
+		image = self.image(depth, 70, 63)  # not a multiple of the patch size: edge patches of other sizes
+		out = {}
+		for real_fft in (True, False):
+			deconv = Deconvolver(self.psf(), image.shape, patch_size=patch_size, zpad=depth - 1,
+			                     patch_overlap=patch_overlap, beta=0.0001, real_fft=real_fft)
+			out[real_fft] = deconv.apply(image, flat_field=cp.full(image.shape[1:], 1.1, dtype=cp.float32), blur_radius=7)
+		scale = float(cp.max(cp.abs(out[False])))
+		assert scale > 100
+		assert float(cp.max(cp.abs(out[True] - out[False]))) < 2e-4 * scale
+
+	def test_same_result_with_one_psf_per_patch(self):
+		psfs = {"a": self.psf(), "b": self.psf() * 0.9, "c": np.roll(self.psf(), 1, axis=2), "d": self.psf()}
+		image = self.image(8, 50, 50)
+		out = [Deconvolver(psfs, image.shape, patch_size=25, zpad=7, patch_overlap=8, beta=0.001,
+		                   real_fft=real_fft).apply(image) for real_fft in (True, False)]
+		assert float(cp.max(cp.abs(out[0] - out[1]))) < 2e-4 * float(cp.max(cp.abs(out[1])))
+
+	def test_patch_wise_yields_the_same_raw_patch(self):
+		image = self.image(6, 40, 40)
+		args = dict(psfs=self.psf(), channel_shape=image.shape, patch_size=24, zpad=5, patch_overlap=8)
+		for (x, y, a, raw_a), (_, _, b, raw_b) in zip(Deconvolver(real_fft=True, **args).patch_wise(image),
+		                                                Deconvolver(real_fft=False, **args).patch_wise(image)):
+			assert a.shape == b.shape and cp.array_equal(raw_a, raw_b)

@@ -1,16 +1,19 @@
-default:
-	python3 -m pip install ../mermake/ --user
+.PHONY: install test lint docs build clean
 
-clean:
-	rm -fr build
-	rm -fr dist
-	rm -fr mermake.egg-info
-	python3 -m pip uninstall mermake -y
-egg:
-	pip install -e .
-build:
-	python3 -m build
-	python3 -m twine upload dist/*
+install:
+	uv sync --extra cuda12
 
 test:
-	pytest tests/ -v
+	uv run pytest tests/ -v
+
+lint:
+	uv run ruff check
+
+docs:
+	uv run --group docs mkdocs build --strict
+
+build:
+	uv build
+
+clean:
+	rm -rf build dist *.egg-info

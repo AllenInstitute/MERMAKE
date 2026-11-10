@@ -1,11 +1,12 @@
 import pytest
-import numpy as np
+
+pytest.importorskip("cupy")
+pytestmark = pytest.mark.gpu
 import cupy as cp
 import pickle
 import os
 import tempfile
 from unittest.mock import Mock, patch, MagicMock
-from concurrent.futures import ThreadPoolExecutor
 
 # Import the classes and functions to test
 from mermake.align import Aligner, DualAligner, drift_save, drift
@@ -105,7 +106,7 @@ class TestAligner:
 		with patch.object(aligner, 'get_im_from_Xh') as mock_get_im:
 			mock_get_im.return_value = (cp.ones((10, 10, 10)), cp.zeros(3))
 			
-			with patch('mermake.align.fftconvolve') as mock_fftconvolve:
+			with patch.object(aligner, 'fftconvolve') as mock_fftconvolve:
 				mock_fftconvolve.return_value = cp.ones((20, 20, 20))
 				
 				tzxy = aligner.get_best_translation_points(X)
@@ -119,7 +120,7 @@ class TestAligner:
 		with patch.object(aligner, 'get_im_from_Xh') as mock_get_im:
 			mock_get_im.return_value = (cp.ones((10, 10, 10)), cp.zeros(3))
 			
-			with patch('mermake.align.fftconvolve') as mock_fftconvolve:
+			with patch.object(aligner, 'fftconvolve') as mock_fftconvolve:
 				mock_fftconvolve.return_value = cp.ones((20, 20, 20))
 				
 				with patch.object(aligner, 'get_Xtzxy') as mock_get_Xtzxy:
@@ -256,10 +257,6 @@ class TestUtilityFunctions:
 		mock_block.fov.return_value = 1
 		mock_block.iset.return_value = 2
 		
-		kwargs = {
-			'output_folder': '/tmp',
-			'drift_save': 'drift_fov{ifov}_iset{iset}.pkl'
-		}
 		
 		with patch('os.path.exists', return_value=True):
 			result = drift(mock_block)
@@ -281,12 +278,7 @@ class TestUtilityFunctions:
 			mock_images.append(mock_image)
 		
 		mock_block.__iter__.return_value = iter(mock_images)
-		mock_block.__getitem__.return_value = mock_images[2]  # Middle image as reference
 		
-		kwargs = {
-			'output_folder': '/tmp',
-			'drift_save': 'drift_fov{ifov}_iset{iset}.pkl'
-		}
 		
 		with patch('os.path.exists', return_value=False):
 			with patch('mermake.align.DualAligner') as mock_dual_class:
@@ -301,7 +293,7 @@ class TestUtilityFunctions:
 				assert len(drifts) == 5  # Number of images
 				assert len(files) == 5
 				assert ifov == 1
-				assert 'image_2.tif' in ref_path
+				assert 'image_0.tif' in ref_path  # the first round is the reference
 				assert filepath == '/tmp/drift_fov1_iset2.pkl', filepath
 
 
@@ -335,7 +327,7 @@ class TestEdgeCases:
 		
 		# Should not handle empty arrays gracefully
 		with pytest.raises((ValueError)):
-			dual = DualAligner(ref, th=0.5)
+			DualAligner(ref, th=0.5)
 		#assert dual.plus is not None
 		#assert dual.minus is not None
 
@@ -376,3 +368,51 @@ class TestIntegration:
 
 if __name__ == "__main__":
 	pytest.main([__file__])
+
+
+class TestCpuBackend:
+	"""The drift runs on numpy (scipy) as well as on cupy, with the same result."""
+
+	@staticmethod
+	def points(shift, seed=0):
+		import numpy as np
+		rng = np.random.default_rng(seed)
+		xyz = rng.uniform([0, 0, 0], [40, 500, 500], (2000, 3))
+		h = rng.uniform(5, 10, (2000, 1))
+		moved = xyz + shift + np.random.default_rng(seed + 1).normal(0, 0.2, xyz.shape)
+		return np.hstack([xyz, h]), np.hstack([moved, h])
+
+	def test_cpu_finds_the_shift_and_agrees_with_the_gpu(self):
+		import numpy as np
+		from types import SimpleNamespace
+		from mermake.align import drift_rounds, to_numpy
+		shift = np.array([1.0, -7.0, 12.0])
+		ref, moved = self.points(shift)
+		img = lambda X, xp: SimpleNamespace(Xh_plus=xp.asarray(X), Xh_minus=xp.asarray(X))
+		cpu = drift_rounds(img(ref, np), [img(moved, np)])[0]
+		gpu = drift_rounds(img(ref, cp), [img(moved, cp)])[0]
+		assert isinstance(cpu[0], np.ndarray)
+		assert np.allclose(cpu[0], -shift, atol=0.1)
+		assert np.allclose(cpu[0], to_numpy(gpu[0]), atol=1e-6)
+		assert (cpu[3], cpu[4]) == (int(gpu[3]), int(gpu[4]))
+
+	def test_save_drift_writes_a_row_per_round_and_the_pickle(self, tmp_path):
+		import numpy as np
+		from types import SimpleNamespace
+		from mermake.align import save_drift
+		from mermake.io import spots
+		ref, moved = self.points(np.array([0.0, 3.0, -4.0]))
+		images = [SimpleNamespace(path=f"/x/H{ih}_set1/f.zarr", ih=ih, Xh_plus=X, Xh_minus=X)
+		          for ih, X in ((1, ref), (2, moved))]
+		pkl = tmp_path / "drift.pkl"
+		# the first round alone: its row, but no pickle while the field of view is incomplete
+		assert save_drift(images[:1], 1, 7, str(pkl), str(tmp_path), "parquet", complete=False) == 1
+		assert spots.drift_exists(str(tmp_path), 1, 7, 1) and not pkl.exists()
+		assert save_drift(images, 1, 7, str(pkl), str(tmp_path), "parquet", complete=True) == 2
+		assert save_drift(images, 1, 7, str(pkl), str(tmp_path), "parquet", complete=True) == 0
+		table = spots.open_dataset(str(tmp_path), spots.DRIFT_DIR).to_table().sort_by("ih")
+		assert table.column("ref_ih").to_pylist() == [1, 1]
+		assert np.allclose([table.column(c)[1].as_py() for c in ("dz", "dx", "dy")], [0, -3, 4], atol=0.1)
+		with open(pkl, "rb") as f:
+			drifts, files, ifov, ref_path = pickle.load(f)
+		assert ifov == 7 and ref_path == images[0].path and len(drifts) == 2

@@ -1,0 +1,332 @@
+"""CPU-only tests for config helpers, XML metadata and point helpers."""
+from dataclasses import fields
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
+from mermake import cli
+from mermake.config import (Config, ConfigError, DEFAULTS, Output, Params, Paths, Run, namespace_to_array,
+                            reference_rows, tomllib)
+from mermake.io.metadata import get_xml_field, read_xml
+from mermake.points import estimate_step_size, points_to_coords
+
+
+class TestNamespaceToArray:
+	def test_flattens_with_dotted_prefix(self):
+		rows = namespace_to_array({"paths": {"psf": "a.npy"}, "gpu": 0})
+		assert ("paths", "psf", "a.npy") in rows
+		assert ("", "gpu", "0") in rows
+
+	def test_accepts_namespaces(self):
+		ns = SimpleNamespace(hybs=SimpleNamespace(patch_size=500))
+		assert namespace_to_array(ns) == [("hybs", "patch_size", "500")]
+
+	def test_deeper_nesting(self):
+		rows = namespace_to_array({"a": {"b": {"c": 1}}})
+		assert rows == [("a.b", "c", "1")]
+
+
+class TestXml:
+	XML = '<?xml version="1.0"?><root><z_offsets type="string">0:-15:-0.4:3</z_offsets></root>'
+
+	def test_get_field(self, tmp_path):
+		path = tmp_path / "scan.xml"
+		path.write_text(self.XML, encoding="ISO-8859-1")
+		assert get_xml_field(str(path), "z_offsets") == "0:-15:-0.4:3"
+
+	def test_read_xml_root(self, tmp_path):
+		path = tmp_path / "scan.xml"
+		path.write_text(self.XML, encoding="ISO-8859-1")
+		assert read_xml(str(path)).tag == "root"
+
+
+class TestPoints:
+	def grid(self, step=10.0, n=4):
+		xs, ys = np.meshgrid(np.arange(n) * step, np.arange(n) * step)
+		return np.column_stack([xs.ravel(), ys.ravel()])
+
+	def test_estimate_step_size(self):
+		assert estimate_step_size(self.grid(10.0)) == 10.0
+
+	def test_points_to_coords(self):
+		pts = self.grid(10.0) + 100.0
+		coords = points_to_coords(pts)
+		assert coords.min() == 0 and coords.max() == 3
+		assert len({tuple(c) for c in coords}) == 16
+
+	def test_points_to_coords_does_not_modify_input(self):
+		pts = self.grid(10.0) + 5.0
+		before = pts.copy()
+		points_to_coords(pts)
+		np.testing.assert_array_equal(pts, before)
+
+
+# ---- Config validation -------------------------------------------------------------
+
+REQUIRED = dict(psf_file="psf.npy", flat_field_tag="flat_", hyb_folders=["exp"],
+                hyb_range="H1_X_set1:H2_X_set1", output_folder="out")
+
+
+def load(paths=None, **sections):
+	return Config.from_dict({"paths": paths or REQUIRED, **sections}, check_files=False)
+
+
+class TestDefaults:
+	def test_only_required_keys_needed(self):
+		cfg = load()
+		assert cfg.hybs.threshold == 3600 and cfg.dapi.threshold == 3.0
+		assert cfg.paths.fov_range is None
+		assert cfg.paths.drift_save == "drift_{fov}--_set{iset}.pkl"
+
+	def test_override_one_value(self):
+		cfg = load(hybs={"threshold": 4000})
+		assert cfg.hybs.threshold == 4000
+		assert cfg.hybs.beta == DEFAULTS["hybs"]["beta"]
+		assert cfg.dapi.threshold == 3.0
+
+	def test_threshold_per_channel(self):
+		cfg = load(hybs={"threshold": [18810, 9051, 4.5]})
+		assert cfg.hybs.threshold == [18810.0, 9051.0, 4.5]
+		assert all(isinstance(t, float) for t in cfg.hybs.threshold)
+
+	def test_numbers_are_coerced(self):
+		cfg = load(hybs={"sigmaZ": 2})
+		assert isinstance(cfg.hybs.sigmaZ, float) and isinstance(cfg.dapi.sigmaZ, float)
+
+	def test_fft_defaults(self):
+		cfg = load()
+		# 500 + 2 * 110 = 720 = 2^4 * 3^2 * 5, a size the FFT is fast for (it was 89, 678 = 2 * 3 * 113)
+		assert cfg.hybs.patch_overlap == cfg.dapi.patch_overlap == 110
+		assert (cfg.hybs.patch_size + 2 * cfg.hybs.patch_overlap) == 720
+		assert cfg.hybs.real_fft is True and cfg.dapi.real_fft is True
+
+	def test_old_fft_settings_can_be_restored(self):
+		cfg = load(hybs={"patch_overlap": 89, "real_fft": False}, dapi={"real_fft": False})
+		assert cfg.hybs.patch_overlap == 89 and cfg.hybs.real_fft is False
+		assert cfg.dapi.patch_overlap == 110 and cfg.dapi.real_fft is False
+
+	def test_vars_gives_kwargs_for_gpu_functions(self):
+		assert set(vars(load().hybs)) == {f.name for f in fields(Params)}
+
+
+class TestValidation:
+	def error(self, **kwargs):
+		with pytest.raises(ConfigError) as exc:
+			load(**kwargs)
+		return str(exc.value)
+
+	def test_missing_required(self):
+		with pytest.raises(ConfigError, match="missing required key 'psf_file'"):
+			Config.from_dict({"paths": {}}, check_files=False)
+
+	def test_misspelled_key_suggests_fix(self):
+		assert "did you mean 'threshold'" in self.error(hybs={"threshhold": 5})
+
+	def test_unknown_section(self):
+		assert "unknown section 'hyb'" in self.error(hyb={})
+
+	def test_retired_keys(self):
+		assert "renamed to 'patch_size'" in self.error(hybs={"tile_size": 5})
+		assert "renamed to 'patch_overlap'" in self.error(dapi={"overlap": 5})
+		assert "no longer used" in self.error(paths=dict(REQUIRED, codebook="x"))
+
+	def test_wrong_type(self):
+		assert "patch_size must be an integer" in self.error(hybs={"patch_size": "big"})
+		assert "patch_size must be an integer" in self.error(hybs={"patch_size": 1.5})
+		assert "hyb_folders must be a list of strings" in self.error(paths=dict(REQUIRED, hyb_folders="exp"))
+
+	@pytest.mark.parametrize("value", [1, 0, "true", "no", 1.0, [True]])
+	def test_real_fft_must_be_true_or_false(self, value):
+		assert "real_fft must be true or false" in self.error(hybs={"real_fft": value})
+
+	def test_threshold_list_errors(self):
+		assert "threshold must be one number" in self.error(dapi={"threshold": [1.0, 2.0]})
+		assert "must not be an empty list" in self.error(hybs={"threshold": []})
+		assert "threshold must be a number or a list of numbers" in self.error(hybs={"threshold": ["a"]})
+
+	def test_value_ranges(self):
+		assert "delta must be between 1 and 5" in self.error(hybs={"delta": 6})
+		assert "beta must be positive" in self.error(dapi={"beta": 0})
+		assert "delta_fit must be between 1 and 5" in self.error(hybs={"delta_fit": 0})
+		assert "delta_fit must be between 1 and 5" in self.error(dapi={"delta_fit": 6})
+
+	def test_ranges_and_regex(self):
+		assert "hyb_range" in self.error(paths=dict(REQUIRED, hyb_range="H1_X_set1"))
+		assert "does not match regex" in self.error(paths=dict(REQUIRED, hyb_range="foo:bar"))
+		assert "fov_range" in self.error(paths=dict(REQUIRED, fov_range="5:1"))
+		assert "regex" in self.error(paths=dict(REQUIRED, regex="(("))
+		assert "5 capture groups" in self.error(paths=dict(REQUIRED, regex="(a)"))
+
+	def test_sum_channels(self):
+		assert load().paths.sum_channels is None
+		assert load(paths=dict(REQUIRED, sum_channels=[0, 1])).paths.sum_channels == [0, 1]
+		assert "sum_channels must be a list of integers" in self.error(paths=dict(REQUIRED, sum_channels="01"))
+		assert "sum_channels must be a list of integers" in self.error(paths=dict(REQUIRED, sum_channels=[0, "a"]))
+		for bad in ([0], [0, 1, 2], [1, 1], [-1, 1]):
+			assert "sum_channels must be two different" in self.error(paths=dict(REQUIRED, sum_channels=bad))
+
+	def test_dapi_channel(self):
+		assert load().paths.dapi_channel == -1
+		assert load(paths=dict(REQUIRED, dapi_channel=0)).paths.dapi_channel == 0
+		assert "dapi_channel must be -1" in self.error(paths=dict(REQUIRED, dapi_channel=-2))
+
+	def test_all_errors_reported_together(self):
+		msg = self.error(hybs={"threshhold": 5}, dapi={"beta": -1, "delta": 9})
+		assert msg.count("\n") == 2
+
+	def test_missing_files_reported(self, tmp_path):
+		with pytest.raises(ConfigError) as exc:
+			Config.from_dict({"paths": dict(REQUIRED)}, base_dir=str(tmp_path))
+		msg = str(exc.value)
+		assert "psf_file" in msg and "flat_field_tag" in msg and "hyb_folders" in msg
+
+
+class TestPaths:
+	def test_relative_paths_resolve_against_settings_dir(self, tmp_path):
+		(tmp_path / "settings.toml").write_text(
+			"[paths]\npsf_file='p.npy'\nflat_field_tag='f_'\nhyb_folders=['e']\n"
+			"hyb_range='H1_X_set1:H2_X_set1'\noutput_folder='o'\n")
+		cfg = Config.from_file(tmp_path / "settings.toml", check_files=False)
+		assert cfg.paths.psf_file == str(tmp_path / "p.npy")
+		assert cfg.paths.hyb_folders == [str(tmp_path / "e")]
+		assert cfg.paths.output_folder == str(tmp_path / "o")
+
+	def test_absolute_paths_kept(self):
+		cfg = Config.from_dict({"paths": dict(REQUIRED, psf_file="/data/psf.npy")},
+		                       base_dir="/somewhere", check_files=False)
+		assert cfg.paths.psf_file == "/data/psf.npy"
+
+
+class TestRoundTrip:
+	def test_to_toml_reloads_equal(self):
+		cfg = load(hybs={"threshold": 4000}, paths=dict(REQUIRED, fov_range="0:3"))
+		again = Config.from_dict(tomllib.loads(cfg.to_toml()), check_files=False)
+		assert again == cfg
+
+	def test_booleans_are_written_as_toml(self):
+		cfg = load(hybs={"real_fft": False})
+		text = cfg.to_toml()
+		assert "real_fft = false" in text and "real_fft = true" in text  # [hybs] and [dapi]
+		assert Config.from_dict(tomllib.loads(text), check_files=False) == cfg
+
+	def test_default_regex_survives(self):
+		again = Config.from_dict(tomllib.loads(load().to_toml()), check_files=False)
+		assert again.paths.regex == load().paths.regex == r'([A-z]+)(\d+)_(.+)_set(\d+)(.*)'
+
+
+class TestDocs:
+	def test_every_field_is_documented(self):
+		for cls in (Paths, Params, Output, Run):
+			for f in fields(cls):
+				assert f.metadata.get("doc", "").strip(), f"{cls.__name__}.{f.name} has no doc"
+
+	def test_every_params_field_has_defaults_for_both_sections(self):
+		names = {f.name for f in fields(Params)}
+		assert set(DEFAULTS["hybs"]) == names and set(DEFAULTS["dapi"]) == names
+
+	def test_reference_rows_cover_all_settings(self):
+		keys = {(r["section"], r["key"]) for r in reference_rows()}
+		assert ("paths", "psf_file") in keys and ("dapi", "sigmaXY") in keys
+		required = {r["key"] for r in reference_rows() if r["required"] and r["section"] == "paths"}
+		assert required == {"psf_file", "flat_field_tag", "hyb_folders", "hyb_range", "output_folder"}
+		assert {("run", "gpus"), ("run", "prefetch")} <= keys
+
+	def test_patch_overlap_documents_the_change_of_its_default(self):
+		# the description is what --print-config and the configuration page show
+		doc = next(f.metadata["doc"] for f in fields(Params) if f.name == "patch_overlap")
+		assert "89" in doc and "110" in doc and "0.1.0" in doc
+		assert "89" in load().to_toml()
+
+	def test_real_fft_is_listed_with_its_defaults(self):
+		rows = {(r["section"], r["key"]): r for r in reference_rows()}
+		assert rows[("hybs", "real_fft")]["default"] is True and rows[("dapi", "real_fft")]["type"] == "true or false"
+		assert rows[("hybs", "patch_overlap")]["default"] == rows[("dapi", "patch_overlap")]["default"] == 110
+
+	def test_packaged_example_is_valid(self):
+		cfg = Config.from_dict(tomllib.loads(cli.example_text()), check_files=False)
+		assert cfg.paths.hyb_range == "H1_BICAN_set1:H16_BICAN_set1"
+
+	def test_packaged_run_example_is_valid_when_uncommented(self):
+		lines = cli.example_text().splitlines()
+		start = lines.index("#[run]")
+		block = [line[1:] for line in lines[start:start + 3]]
+		assert block[0] == "[run]" and block[1].startswith("gpus") and block[2].startswith("prefetch")
+		cfg = Config.from_dict(tomllib.loads(cli.example_text() + "\n" + "\n".join(block)), check_files=False)
+		assert cfg.run.gpus == "all" and cfg.run.prefetch == 3
+
+
+class TestOutput:
+	def test_default_is_parquet(self):
+		assert load().output.format == "parquet"
+
+	@pytest.mark.parametrize("fmt", ["parquet", "npz", "both"])
+	def test_valid_formats(self, fmt):
+		assert load(output=dict(format=fmt)).output.format == fmt
+
+	def test_invalid_format(self):
+		with pytest.raises(ConfigError, match="format must be one of"):
+			load(output=dict(format="csv"))
+
+
+class TestRun:
+	def test_defaults(self):
+		run = load().run
+		assert run.gpus is None and run.prefetch == 5
+
+	@pytest.mark.parametrize("value, expected", [
+		("all", "all"), ("0,1", "0,1"), (" 0, 1 ", "0,1"), ("2", "2"), ("0,0,1,1", "0,0,1,1"),
+		([0, 1], "0,1"), ([3], "3"), ([0, 0, 1], "0,0,1")])
+	def test_gpus_is_kept_as_the_text_of_the_option(self, value, expected):
+		assert load(run={"gpus": value}).run.gpus == expected
+
+	@pytest.mark.parametrize("value", ["zero", "-1", "0,,1", "0;1", "", "all,0", [], [-1], [0, "a"], 0, True, 1.5])
+	def test_bad_gpus(self, value):
+		with pytest.raises(ConfigError, match=r"\[run\] gpus"):
+			load(run={"gpus": value})
+
+	def test_prefetch(self):
+		assert load(run={"prefetch": 2}).run.prefetch == 2
+		for value in (0, -1):
+			with pytest.raises(ConfigError, match="prefetch must be at least 1"):
+				load(run={"prefetch": value})
+		for value in ("2", True, 2.5):
+			with pytest.raises(ConfigError, match="prefetch must be an integer"):
+				load(run={"prefetch": value})
+
+	def test_read_threads(self):
+		assert load().run.read_threads is None
+		assert load(run={"read_threads": 16}).run.read_threads == 16
+		for value in (0, -2):
+			with pytest.raises(ConfigError, match="read_threads must be at least 1"):
+				load(run={"read_threads": value})
+		for value in ("16", True, 2.5):
+			with pytest.raises(ConfigError, match="read_threads"):
+				load(run={"read_threads": value})
+
+	def test_overlap_channels(self):
+		assert load().run.overlap_channels is False
+		assert load(run={"overlap_channels": True}).run.overlap_channels is True
+		with pytest.raises(ConfigError, match="overlap_channels"):
+			load(run={"overlap_channels": "yes"})
+
+	def test_misspelled_key_suggests_fix(self):
+		with pytest.raises(ConfigError, match="did you mean 'gpus'"):
+			load(run={"gpu": 1})
+
+	def test_round_trip(self):
+		cfg = load(run={"gpus": [0, 0, 1], "prefetch": 2})
+		text = cfg.to_toml()
+		assert "gpus = '0,0,1'" in text and "prefetch = 2" in text
+		assert Config.from_dict(tomllib.loads(text), check_files=False) == cfg
+
+	def test_not_set_is_written_as_a_comment(self):
+		assert "# gpus = (not set)" in load().to_toml()
+		assert Config.from_dict(tomllib.loads(load().to_toml()), check_files=False) == load()
+
+	def test_listed_with_its_description(self):
+		rows = {(r["section"], r["key"]): r for r in reference_rows()}
+		assert rows[("run", "gpus")]["type"] == "string or list of integers"
+		assert rows[("run", "gpus")]["default"] is None and not rows[("run", "gpus")]["required"]
+		assert rows[("run", "prefetch")]["default"] == 5 and rows[("run", "prefetch")]["unit"] == "images"
+		assert "--gpus" in rows[("run", "gpus")]["doc"] and "--prefetch" in rows[("run", "prefetch")]["doc"]

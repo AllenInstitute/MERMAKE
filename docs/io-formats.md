@@ -59,6 +59,8 @@ table = spots.open_dataset("output_folder").to_table(filter=ds.field("ifov") == 
 
 `spots.parquet` has one row per maximum with the columns `kind` (`hyb`, `dapi_plus` or `dapi_minus`), `ih` (round number), `icol` (color channel, `-1` for dapi) and the 8 columns `z, x, y, background, a, habs, hn, h` described [below](#maxima-xh-xh_plus-xh_minus). The schema metadata holds `version` and `args`.
 
+`drift.parquet` has one row per round (`part-drift-r<round>.parquet` in the folder of the field of view): `ih` and `ref_ih` (the round and the reference round, the first one), `dz, dx, dy` (the correction in voxels: add it to the coordinates of the round to bring them onto the reference), `plus_dz` ... `minus_dy` (the translations found with the positive and the negative dapi maxima) and `n_plus`, `n_minus` (the points matched in each). A round gets its row as soon as it and the first round are fitted, also from `mermake --drift`. Read it like the spots: `spots.open_dataset(output_folder, spots.DRIFT_DIR)`.
+
 `diagnostics.parquet` has one row per image channel (and kind): `n_spots`, the 5th, 50th and 95th percentile (`_p05`, `_p50`, `_p95`) of `background`, `a`, `habs`, `hn` and `h`, and for color channels `raw_sum` and `deconv_sum` (sums over all patches of the raw and the deconvolved data), `n_candidates` and `n_edge_dropped` (maxima found, and dropped for lying in the overlap margin of a patch). For dapi, `std_val` is the standard deviation the deconvolved image is divided by. Statistics are not recomputed for results that already exist.
 
 ### Plots
@@ -94,13 +96,12 @@ float32 arrays with one row per maximum and 8 columns, in voxels of the full ima
 
 A pickle of the list `[drifts, files, ifov, ref_path]`:
 
-- `drifts`: one tuple `(tzxyf, tzxy_plus, tzxy_minus, N_plus, N_minus)` per round, in processing order. `tzxyf` is the `(z, x, y)` shift in voxels that corrects that round, from the plus and minus alignments together.
+- `drifts`: one tuple `(tzxyf, tzxy_plus, tzxy_minus, N_plus, N_minus)` per round, in round order, as NumPy arrays. `tzxyf` is the `(z, x, y)` shift in voxels that corrects that round, from the plus and minus alignments together.
 - `files`: the round folder of each entry of `drifts`.
 - `ifov`: the field of view number.
-- `ref_path`: the image that was used as the reference, the middle round.
+- `ref_path`: the image that was used as the reference, the first round.
 
-!!! warning
-    The arrays inside are CuPy arrays, so unpickling needs CuPy and a GPU (see [known issues](known-issues.md)).
+The pickle is written once all rounds of the field of view are fitted. Files written before this version hold CuPy arrays (unpickling them needs CuPy) and use the middle round as the reference. A drift relative to the middle round converts to one relative to the first by subtraction: `d(r, first) = d(r, middle) - d(first, middle)`.
 
 ## Tips
 

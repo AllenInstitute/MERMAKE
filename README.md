@@ -10,6 +10,8 @@ You need an NVIDIA GPU. Pick the extra for your CUDA version, `cuda12` or `cuda1
 uv sync --extra cuda12          # or: python3 -m pip install "mermake[cuda12]"
 ```
 
+To read images straight from S3, add the `s3` extra: `uv sync --extra cuda12 --extra s3` (or `mermake[cuda12,s3]`).
+
 ## Quickstart
 
 Write a settings file with the five required paths:
@@ -32,17 +34,38 @@ uv run mermake settings.toml              # process; existing results are skippe
 
 `mermake --print-config settings.toml` prints every setting with its description and the value that will be used.
 
+## Images in S3
+
+`hyb_folders` can be an `s3://` URL. mermake then lists and reads the images straight from the bucket, without a mount or a copy (this needs the `s3` extra):
+
+```toml
+[paths]
+hyb_folders = ['s3://my-bucket/experiment']    # psf_file, flat_field_tag and output_folder stay local
+
+[run]
+read_threads = 32       # per worker; S3 serves many requests at once
+```
+
+- **Credentials** come from the usual AWS chain: the `AWS_*` environment variables, `~/.aws`, or the machine's role. Options for fsspec go in `[paths] storage_options`, for example `{profile = "mylab"}`. Don't put keys in the settings file.
+- **Temporary credentials expire.** In a run that outlives them, the remaining images fail with a warning and are skipped. Run again with fresh credentials: finished images are not redone.
+- **Run in the bucket's region.** Transfer within a region is free; between regions it is billed per GB.
+- **One worker per GPU is usually enough.** Read from S3, one worker kept a T4, an A10G and an L4 85-93 % busy on 8-vCPU machines. 32 read threads were as fast as 64, and used less RAM.
+- **Plan host RAM for a full read-ahead queue.** From S3 the reader keeps ahead of the GPU, so the queue stays full. That came to about 15 GiB per worker at `--prefetch 1` for 4 x 40 x 2800 x 2800 images, and 18-19 GiB at `--prefetch 2`. So run 1 worker per GPU on a 32 GiB machine; 16 GiB is not enough.
+
+`mermake --dry-run` checks the bucket access and lists the images. See [images in object storage](docs/configuration.md#images-in-object-storage) and the measured read rates in [several GPUs and nodes](docs/scaling.md).
+
 ## Several GPUs and nodes
 
 One `mermake` process drives one GPU. To use more, run one process per GPU, each on its own share of the fields of view (every round of a field of view stays in the same share, because its drift needs them all):
 
 ```bash
 uv run mermake --gpus all settings.toml        # one worker per GPU of this machine (or --gpus 0,2)
+                                               # the same in the settings file, for a job without options: [run] gpus = "all"
 uv run mermake --shard 2/8 settings.toml       # one process: share 2 (from 0) of 8
 sbatch --array=0-7 scripts/run_slurm_parallel.sbatch   # SLURM: 8 shards, one GPU each
 ```
 
-Results are written one field of view at a time, each file under a temporary name until it is complete, so a run that is killed or hits a time limit continues where it stopped when you run it again. Images are read ahead of the GPU, whole, so a process needs RAM for about `--prefetch` + 3 images (13-21 GiB for 4 x 40 x 2800 x 2800 data); `--prefetch 2` is enough when the GPU is the bottleneck. Check that your storage can feed several GPUs with `scripts/bench_read.py`. See [several GPUs and nodes](docs/scaling.md), which also has the measured memory and timings. The SLURM scripts have not been run on a real cluster yet.
+Results are written one field of view at a time, each file under a temporary name until it is complete, so a run that is killed or hits a time limit continues where it stopped when you run it again. Images are read ahead of the GPU, whole, so a process needs RAM for about `--prefetch` + 3 images plus a few GiB. When the input keeps the queue full, that was measured at about 15 GiB at `--prefetch 1` and 18-19 GiB at `--prefetch 2`, for 4 x 40 x 2800 x 2800 data. `--prefetch 1` is enough when the input is fast, as with S3. Check that your storage can feed several GPUs with `scripts/bench_read.py`. See [several GPUs and nodes](docs/scaling.md), which also has the measured memory and timings. The SLURM scripts have not been run on a real cluster yet.
 
 ## Speed and results
 
@@ -69,7 +92,7 @@ real_fft = false
 
 - [Installation](docs/installation.md) and [quickstart on the example data](docs/quickstart.md)
 - [Pipeline overview](docs/pipeline.md)
-- [Configuration reference](docs/configuration.md)
+- [Configuration reference](docs/configuration.md), including [images in object storage (S3)](docs/configuration.md#images-in-object-storage)
 - [Several GPUs and nodes](docs/scaling.md): sharding, SLURM, memory per process and where the time goes
 - [Input and output formats](docs/io-formats.md)
 - [Developer guide](docs/developer.md), [known issues](docs/known-issues.md) and the [changelog](CHANGELOG.md)

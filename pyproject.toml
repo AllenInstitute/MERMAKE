@@ -31,6 +31,7 @@ cuda12 = ["cupy-cuda12x[ctk]"]
 cuda11 = ["cupy-cuda11x[ctk]"]
 viz = ["napari"]
 report = ["matplotlib"]
+s3 = ["s3fs"]
 
 [project.urls]
 Homepage = "https://github.com/AllenInstitute/MERMAKE"

@@ -74,7 +74,9 @@ class TestWorkerJobs:
 		assert len(jobs) == 2
 		for k, (cmd, env) in enumerate(jobs):
 			assert cmd[:3] == [sys.executable, "-m", "mermake"]
-			assert cmd[3:] == ["s.toml", "--shard", f"{k}/2"]
+			# --gpu 0 is the one device the worker can see; it keeps a worker from starting workers
+			# of its own when the settings file has [run] gpus
+			assert cmd[3:] == ["s.toml", "--shard", f"{k}/2", "--gpu", "0"]
 			assert env["CUDA_VISIBLE_DEVICES"] == str(4 + k)
 			assert env["DASK_NUM_WORKERS"] == "8" and env["HOME"] == "/h"
 
@@ -85,6 +87,10 @@ class TestWorkerJobs:
 	def test_a_set_thread_count_is_kept(self):
 		jobs = launch.worker_jobs(["s.toml"], ["0"], environ={"DASK_NUM_WORKERS": "3"}, cpus=16)
 		assert jobs[0][1]["DASK_NUM_WORKERS"] == "3"
+
+	def test_read_threads_replace_the_split_of_the_cores(self):
+		jobs = launch.worker_jobs(["s.toml"], ["0", "0"], environ={"DASK_NUM_WORKERS": "3"}, cpus=4, read_threads=16)
+		assert [env["DASK_NUM_WORKERS"] for _, env in jobs] == ["16", "16"]
 
 	def test_the_machines_share_is_split_between_its_workers(self):
 		# machine 1 of 3 with 2 GPUs takes shares 2 and 3 of 6

@@ -1,9 +1,10 @@
 """Spot results as Parquet datasets, partitioned by set and field of view.
 
-Two datasets live in the output folder::
+Three datasets live in the output folder::
 
     spots.parquet/iset=<set>/ifov=<fov>/part-<kind>-r<round>-c<channel>.parquet
     diagnostics.parquet/iset=<set>/ifov=<fov>/part-<kind>-r<round>-c<channel>.parquet
+    drift.parquet/iset=<set>/ifov=<fov>/part-drift-r<round>.parquet
 
 A later step that matches spots across rounds and channels reads one field of view with
 ``pyarrow.dataset``::
@@ -24,6 +25,7 @@ import pyarrow.parquet as pq
 
 SPOTS_DIR = "spots.parquet"
 DIAGNOSTICS_DIR = "diagnostics.parquet"
+DRIFT_DIR = "drift.parquet"
 
 # columns of an Xh array, in order (see mermake.maxima.find_local_maxima)
 XH_COLUMNS = ("z", "x", "y", "background", "a", "habs", "hn", "h")
@@ -165,6 +167,41 @@ def write_stats(root, iset, ifov, ih, icol, rows):
 		records.append(record)
 	table = pa.Table.from_pylist(records, schema=STATS_SCHEMA)
 	_write_atomic(table, path)
+	return path
+
+
+# one row per round: the correction (dz, dx, dy) to add to the coordinates of the round to bring them
+# onto the reference round ref_ih, and the two alignments it was made from with their matched points
+DRIFT_SCHEMA = pa.schema(
+	[("ih", pa.int32()), ("ref_ih", pa.int32())]
+	+ [(name, pa.float64()) for name in ("dz", "dx", "dy", "plus_dz", "plus_dx", "plus_dy", "minus_dz", "minus_dx", "minus_dy")]
+	+ [("n_plus", pa.int64()), ("n_minus", pa.int64())])
+
+
+def drift_path(root, iset, ifov, ih):
+	"""Path of the drift part of one round."""
+	return os.path.join(part_dir(root, DRIFT_DIR, iset, ifov), f"part-drift-r{ih}.parquet")
+
+
+def drift_exists(root, iset, ifov, ih):
+	"""Whether the drift of one round has been written."""
+	return os.path.exists(drift_path(root, iset, ifov, ih))
+
+
+def write_drift(root, iset, ifov, ih, ref_ih, result):
+	"""Write the drift of one round unless its part exists. Return the path.
+
+	``result`` is the ``(tzxyf, tzxy_plus, tzxy_minus, N_plus, N_minus)`` tuple of
+	:meth:`mermake.align.DualAligner.get_best_translation_pointsV2`, as numpy.
+	"""
+	path = drift_path(root, iset, ifov, ih)
+	if os.path.exists(path):
+		return path
+	tzxyf, plus, minus, n_plus, n_minus = result
+	values = [float(v) for v in (*np.ravel(tzxyf), *np.ravel(plus), *np.ravel(minus))]
+	record = dict(zip(("dz", "dx", "dy", "plus_dz", "plus_dx", "plus_dy", "minus_dz", "minus_dx", "minus_dy"), values))
+	record.update(ih=ih, ref_ih=ref_ih, n_plus=int(n_plus), n_minus=int(n_minus))
+	_write_atomic(pa.Table.from_pylist([record], schema=DRIFT_SCHEMA), path)
 	return path
 
 

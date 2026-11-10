@@ -30,7 +30,7 @@ set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-$HOME/code/MERMAKE}"            # clone of MERMAKE, with its environment set up
 SETTINGS="${SETTINGS:-$HOME/data/test_settings.toml}" # settings TOML (its paths must be valid here)
-PREFETCH="${PREFETCH:-5}"                             # images read ahead per worker, 2.3 GiB each here
+PREFETCH="${PREFETCH:-}"                              # images read ahead per worker, 2.3 GiB each here. Empty: [run] prefetch of the settings (5)
 # Optional: load site modules if uv or the CUDA driver libraries are not on PATH
 # module load cuda/12.2 uv
 
@@ -45,5 +45,10 @@ if [[ -n "${SLURM_ARRAY_TASK_COUNT:-}" ]]; then
     shard_args=(--shard "${shard}/${SLURM_ARRAY_TASK_COUNT}")
 fi
 
-# --gpus all starts one worker per GPU of this task (one GPU: one worker)
-exec uv run --no-sync mermake --gpus all --prefetch "$PREFETCH" ${shard_args[@]+"${shard_args[@]}"} "$SETTINGS"
+prefetch_args=()
+if [[ -n "$PREFETCH" ]]; then
+    prefetch_args=(--prefetch "$PREFETCH")
+fi
+
+# --gpus all starts one worker per GPU of this task (one GPU: one worker), whatever [run] gpus says
+exec uv run --no-sync mermake --gpus all ${prefetch_args[@]+"${prefetch_args[@]}"} ${shard_args[@]+"${shard_args[@]}"} "$SETTINGS"

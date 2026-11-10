@@ -19,6 +19,7 @@ from dataclasses import dataclass, field, fields, is_dataclass, MISSING
 from types import SimpleNamespace
 from typing import List, Optional, Union
 
+from .io import storage
 from .io.naming import FolderFilter
 
 if sys.version_info >= (3, 11):
@@ -51,7 +52,9 @@ class Paths:
 		"2D array or a `.npz` with key `im`, one per color channel), box blurred and divided by its median.")
 	hyb_folders: List[str] = _f(
 		"Directories to search. Each holds one sub-directory per hybridization round, which in "
-		"turn holds one `.zarr` per field of view.")
+		"turn holds one `.zarr` per field of view. An entry can also be a URL such as "
+		"`s3://bucket/prefix`, read directly from object storage (needs `pip install 'mermake[s3]'`; "
+		"see `storage_options`).")
 	hyb_range: str = _f(
 		"Rounds to process as `first:last`, written like the round folder names, e.g. "
 		"`H1_BICAN_set1:H16_BICAN_set1`. The round number and the set number are compared "
@@ -63,6 +66,11 @@ class Paths:
 	fov_range: Optional[str] = _f(
 		"Only process fields of view with index in `min:max` (inclusive), e.g. `0:10`. "
 		"Default: all.", default=None)
+	storage_options: Optional[dict] = _f(
+		"Advanced. Options for reading `hyb_folders` given as URLs, passed to fsspec (for `s3://`, to "
+		"s3fs), e.g. `{profile = \"mylab\"}` or `{anon = true}`. Not set: the usual AWS credentials (the "
+		"`AWS_*` environment variables, `~/.aws`, or the machine's role). Do not put keys here: only "
+		"the names of these options are saved with the results.", default=None)
 	sum_channels: Optional[List[int]] = _f(
 		"Advanced. Two channel indices (0-based, in the order the channels are stored, before any "
 		"are merged) whose images are summed into one channel when an image is read. For "
@@ -162,6 +170,36 @@ class Output:
 		default="parquet")
 
 
+@dataclass(kw_only=True)
+class Run:
+	"""The ``[run]`` section: how a run uses the machine.
+
+	The command line options of the same names override these, so a settings file can say how to
+	run where there is no command line (a job that only starts ``mermake settings.toml``).
+	"""
+	gpus: Optional[Union[str, List[int]]] = _f(
+		"Run one worker per GPU of this machine, each on its own share of the fields of view. `all` is "
+		"every visible GPU. Otherwise give the GPU numbers as text (`'0,1,2'`) or as a list (`[0, 1, 2]`), "
+		"counted among the visible ones. A number can be repeated, which runs several workers on one GPU. "
+		"Not set: one process on the first visible GPU. The options `--gpus` and `--gpu` of the command "
+		"line override it.", default=None)
+	prefetch: int = _f(
+		"Images each worker reads ahead of the GPU. Each is held in memory whole (about 2.3 GiB for 4 "
+		"channels of 40 x 2800 x 2800) and a worker holds a few more than this, so it sets most of the "
+		"RAM use. The option `--prefetch` of the command line overrides it.", unit="images", default=5)
+	read_threads: Optional[int] = _f(
+		"Threads each worker reads and decompresses image chunks with. Not set: the machine's cores, split "
+		"between the workers. Reading is mostly waiting on storage, so on storage with a high cost per "
+		"request (a FUSE mount of S3, about 0.25 s per file) more threads than cores read faster, up to "
+		"what the storage delivers. The option `--read-threads` of the command line overrides it.",
+		unit="threads", default=None)
+	overlap_channels: bool = _f(
+		"Read all the channels of an image at once instead of one after the other, so that the storage "
+		"is not left idle at the end of each channel. Off by default: while an image is read it can hold "
+		"up to one more image of host RAM. The option `--overlap-channels` of the command line turns it "
+		"on.", default=False)
+
+
 # Defaults of [hybs] and [dapi].
 #
 # NOTE patch_overlap is 110. Up to version 0.1.0 it was 89. The deconvolution FFT runs on patches
@@ -180,7 +218,7 @@ DEFAULTS = {
 	             delta=5, delta_fit=5, sigmaZ=1, sigmaXY=1.5),
 }
 
-SECTIONS = {"paths": Paths, "hybs": Params, "dapi": Params, "output": Output}
+SECTIONS = {"paths": Paths, "hybs": Params, "dapi": Params, "output": Output, "run": Run}
 
 # keys that used to exist, with what to tell the user
 RETIRED = {
@@ -198,6 +236,7 @@ class Config:
 	hybs: Params
 	dapi: Params
 	output: Output
+	run: Run
 
 	@classmethod
 	def from_file(cls, path, **kwargs):
@@ -252,6 +291,8 @@ class Config:
 		if sections.get("output") is not None and sections["output"].format not in OUTPUT_FORMATS:
 			errors.append(f"[output] format must be one of {', '.join(OUTPUT_FORMATS)}, "
 			              f"got {sections['output'].format!r}")
+		if sections.get("run") is not None:
+			_check_run(sections["run"], errors)
 		if errors:
 			raise ConfigError("\n".join(f"  - {e}" for e in errors))
 		return cls(**sections)
@@ -301,7 +342,7 @@ def _type_name(tp):
 		return " or ".join(_type_name(a) for a in typing.get_args(tp) if a is not type(None))
 	if typing.get_origin(tp) in (list, List):
 		return f"list of {_type_name(typing.get_args(tp)[0])}s"
-	return {bool: "true or false", int: "integer", float: "number", str: "string"}[tp]
+	return {bool: "true or false", int: "integer", float: "number", str: "string", dict: "table"}[tp]
 
 
 def _toml_value(value):
@@ -313,6 +354,8 @@ def _toml_value(value):
 		return "true" if value else "false"
 	if isinstance(value, list):
 		return "[" + ", ".join(_toml_value(v) for v in value) + "]"
+	if isinstance(value, dict):
+		return "{" + ", ".join(f"{k} = {_toml_value(v)}" for k, v in value.items()) + "}"
 	return repr(value)
 
 
@@ -359,6 +402,10 @@ def _coerce(value, tp):
 		if not isinstance(value, str):
 			raise TypeError("a string")
 		return value
+	if tp is dict:
+		if not isinstance(value, dict):
+			raise TypeError("a table")
+		return dict(value)
 	raise AssertionError(tp)
 
 
@@ -407,8 +454,26 @@ def _check_params(p, section, errors):
 	need(p.sigmaZ > 0 and p.sigmaXY > 0, "sigmaZ and sigmaXY must be positive")
 
 
+def _check_run(r, errors):
+	"""Check ``[run]`` and write ``gpus`` as the text the ``--gpus`` option takes."""
+	if r.gpus is not None:
+		text = ",".join(str(g) for g in r.gpus) if isinstance(r.gpus, list) else r.gpus
+		text = re.sub(r"\s+", "", text)
+		if text != "all" and not re.fullmatch(r"\d+(,\d+)*", text):
+			errors.append(f"[run] gpus must be 'all', GPU numbers such as '0,1,2' or a list such as "
+			              f"[0, 1, 2], got {r.gpus!r}")
+		else:
+			r.gpus = text
+	if r.prefetch < 1:
+		errors.append(f"[run] prefetch must be at least 1, got {r.prefetch}")
+	if r.read_threads is not None and r.read_threads < 1:
+		errors.append(f"[run] read_threads must be at least 1, got {r.read_threads}")
+
+
 def _check_paths(p, base_dir, check_files, errors):
 	def resolve(path):
+		if storage.is_remote(path):
+			return path
 		path = os.path.expanduser(path)
 		if base_dir and not os.path.isabs(path):
 			path = os.path.join(base_dir, path)
@@ -418,13 +483,23 @@ def _check_paths(p, base_dir, check_files, errors):
 	p.flat_field_tag = resolve(p.flat_field_tag)
 	p.hyb_folders = [resolve(d) for d in p.hyb_folders]
 	p.output_folder = resolve(p.output_folder)
+	for key in ("psf_file", "flat_field_tag", "output_folder"):
+		if storage.is_remote(getattr(p, key)):
+			errors.append(f"[paths] {key} must be a local path; only hyb_folders can be a URL")
 	if check_files:
 		if not os.path.isfile(p.psf_file):
 			errors.append(f"[paths] psf_file '{p.psf_file}' does not exist")
 		if not glob.glob(p.flat_field_tag + "*"):
 			errors.append(f"[paths] flat_field_tag '{p.flat_field_tag}' matches no files")
 		for d in p.hyb_folders:
-			if not os.path.isdir(d):
+			if storage.is_remote(d):
+				storage.configure(p.storage_options)
+				try:
+					if not storage.isdir(d):
+						errors.append(f"[paths] hyb_folders entry '{d}' does not exist")
+				except (ImportError, PermissionError, OSError) as e:
+					errors.append(f"[paths] hyb_folders entry '{d}' cannot be read: {e}")
+			elif not os.path.isdir(d):
 				errors.append(f"[paths] hyb_folders entry '{d}' is not a directory")
 	try:
 		pattern = re.compile(p.regex)
@@ -469,7 +544,9 @@ def namespace_to_array(obj, prefix=''):
 	if isinstance(obj, dict):
 		for k, v in obj.items():
 			full_key = f"{prefix}.{k}" if prefix else k
-			if is_dataclass(v) or isinstance(v, (SimpleNamespace, dict)):
+			if k == "storage_options" and isinstance(v, dict):
+				rows.append((prefix, k, str(sorted(v))))   # the option names only: values can be credentials
+			elif is_dataclass(v) or isinstance(v, (SimpleNamespace, dict)):
 				rows.extend(namespace_to_array(v, prefix=full_key))
 			else:
 				rows.append((prefix, k, str(v)))

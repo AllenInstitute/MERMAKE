@@ -62,17 +62,26 @@ def build_parser(prog=None):
 	parser = CustomArgumentParser(description='', formatter_class=argparse.RawTextHelpFormatter, usage=usage)
 	parser.add_argument('settings', type=is_valid_file, nargs='?', help='settings file')
 	parser.add_argument('-g', '--gpu', type=int, default=None,
-		help="The gpu to use, counted among the visible ones. By default the environment is left "
-		     "alone, so a scheduler's choice (CUDA_VISIBLE_DEVICES) is kept and the first visible gpu is used")
+		help="The gpu to use, counted among the visible ones, in one process (it overrides [run] gpus of the "
+		     "settings file). By default the environment is left alone, so a scheduler's choice "
+		     "(CUDA_VISIBLE_DEVICES) is kept and the first visible gpu is used")
 	parser.add_argument('--gpus', default=None, metavar='LIST',
 		help="Run one worker per gpu on this machine: 'all' or comma separated gpu numbers, for example 0,1,2,3. "
-		     "Each worker takes its own share of the fields of view")
+		     "Each worker takes its own share of the fields of view. Default: [run] gpus of the settings file")
 	parser.add_argument('--shard', type=parse_shard, default=None, metavar='I/N',
 		help="Process only share I (from 0) of N of the fields of view. Run one process per share, for "
 		     "example one per gpu or one per SLURM array task. Every round of a field of view stays together")
-	parser.add_argument('--prefetch', type=positive_int, default=5, metavar='N',
-		help="Images read ahead of the gpu [5]. Each one takes the memory of a whole image (about 2.3 GiB "
-		     "for 4 channels of 40 x 2800 x 2800), and a run holds a few more than this")
+	parser.add_argument('--prefetch', type=positive_int, default=None, metavar='N',
+		help="Images read ahead of the gpu [[run] prefetch of the settings file, 5]. Each one takes the memory "
+		     "of a whole image (about 2.3 GiB for 4 channels of 40 x 2800 x 2800), and a run holds a few more "
+		     "than this")
+	parser.add_argument('--read-threads', type=positive_int, default=None, metavar='N',
+		help="Threads each worker reads images with [[run] read_threads of the settings file; not set: the "
+		     "cores of the machine split between the workers]. More than the cores helps on storage with a "
+		     "high cost per request")
+	parser.add_argument('--overlap-channels', action="store_true", default=None,
+		help="Read all the channels of an image at once instead of one after the other "
+		     "[[run] overlap_channels of the settings file, off]. Can hold up to one more image of RAM")
 	parser.add_argument('-c', '--check', action="store_true", help="Check a single zarr")
 	parser.add_argument('--print-example', action="store_true",
 		help="Print a minimal example settings file and exit")
@@ -80,6 +89,10 @@ def build_parser(prog=None):
 		help="Print every setting with its description and the value that would be used, then exit")
 	parser.add_argument('--dry-run', action="store_true",
 		help="Validate the settings and list the images that would be processed, then exit")
+	parser.add_argument('--drift', action="store_true",
+		help="Compute the drift of every fitted round from the dapi maxima in the output folder, relative "
+		     "to the first round, then exit. Reads no images and needs no GPU; rounds already done are "
+		     "skipped, so it can run while images are still being fitted. Works with --shard")
 	parser.add_argument('--suggest-threshold', action="store_true",
 		help="Sample a few images, count the spots found at every threshold and suggest values "
 		     "for the threshold settings, then exit. Needs a GPU")
@@ -91,10 +104,26 @@ def build_parser(prog=None):
 	return parser
 
 
-def dry_run(config, shard=None):
+def effective_gpus(args):
+	"""The ``--gpus`` value a run uses: the command line's, otherwise ``[run] gpus`` of the settings file.
+
+	The file's value only applies to a normal run that names no gpu. ``--gpu`` overrides it (it is also
+	what the launcher starts each of its workers with, so that they do not start workers of their own),
+	and ``--check`` and ``--suggest-threshold`` are single-process tools that ignore it.
+	"""
+	if args.gpus is not None:
+		return args.gpus
+	if args.gpu is None and not (args.check or args.suggest_threshold):
+		return args.settings.run.gpus
+	return None
+
+
+def dry_run(config, shard=None, gpus=None, prefetch=None, read_threads=None, overlap_channels=None):
 	"""Print what a run would process. Needs no GPU."""
+	from .io import storage
 	from .io.naming import FolderFilter, shard_matches
 	paths = config.paths
+	storage.configure(paths.storage_options)
 	fov_min, fov_max = (-float('inf'), float('inf'))
 	if paths.fov_range:
 		fov_min, fov_max = map(float, paths.fov_range.split(':'))
@@ -107,6 +136,12 @@ def dry_run(config, shard=None):
 	print(folder_filter.summary(matches))
 	print(f"{sum(map(len, matches.values()))} images in {len(matches)} (set, fov) groups")
 	print(f"output folder: {paths.output_folder}")
+	workers = f"one per entry of gpus = {gpus}" if gpus else "one process, on the first visible gpu"
+	print(f"workers: {workers}, prefetch {prefetch if prefetch is not None else config.run.prefetch}")
+	threads = read_threads if read_threads is not None else config.run.read_threads
+	overlap = overlap_channels if overlap_channels is not None else config.run.overlap_channels
+	print(f"read threads per worker: {threads if threads else 'the cores of the machine, split between the workers'}, "
+	      f"channels read {'all at once' if overlap else 'one after the other'}")
 
 
 def main(argv=None):
@@ -123,18 +158,30 @@ def main(argv=None):
 	if args.print_config:
 		print(args.settings.to_toml())
 		return
+	# the command line comes first, then [run] of the settings file, then the defaults
+	if args.prefetch is None:
+		args.prefetch = args.settings.run.prefetch
+	if args.read_threads is None:
+		args.read_threads = args.settings.run.read_threads
+	if args.overlap_channels is None:
+		args.overlap_channels = args.settings.run.overlap_channels
+	gpus = effective_gpus(args)
 	if args.dry_run:
-		dry_run(args.settings, args.shard)
+		dry_run(args.settings, args.shard, gpus, args.prefetch, args.read_threads, args.overlap_channels)
+		return
+	if args.drift:
+		from mermake.align import run_drift
+		run_drift(args.settings, args.shard)
 		return
 
-	if args.gpus is not None:
-		if args.gpu is not None:
-			parser.error("--gpus and --gpu cannot be combined")
+	if args.gpus is not None and args.gpu is not None:
+		parser.error("--gpus and --gpu cannot be combined")
+	if gpus is not None:
 		try:
-			devices = launch.parse_gpus(args.gpus)
+			devices = launch.parse_gpus(gpus)
 		except ValueError as e:
 			parser.error(str(e))
-		return launch.run_workers(launch.worker_jobs(argv, devices, shard=args.shard))
+		return launch.run_workers(launch.worker_jobs(argv, devices, shard=args.shard, read_threads=args.read_threads))
 
 	# set this before cupy is imported to make sure to capture the correct gpu
 	if args.gpu is not None:

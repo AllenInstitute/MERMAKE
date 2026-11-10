@@ -2,8 +2,9 @@
 
 One mermake process drives one GPU. To use several GPUs of a machine, run one process per GPU,
 each on its own share of the fields of view (``--shard``). ``mermake --gpus 0,1,2,3 settings.toml``
-does that. Under SLURM or any other scheduler that sets ``CUDA_VISIBLE_DEVICES``, device numbers
-count among the devices the job can see.
+does that, and so does ``gpus = [0, 1, 2, 3]`` under ``[run]`` in the settings file, for a job that
+cannot take a command line. Under SLURM or any other scheduler that sets ``CUDA_VISIBLE_DEVICES``,
+device numbers count among the devices the job can see.
 
 This module must not import cupy: ``CUDA_VISIBLE_DEVICES`` has to be set before cupy is imported.
 """
@@ -96,12 +97,16 @@ def strip_option(argv, name):
 	return out
 
 
-def worker_jobs(argv, devices, shard=None, environ=None, cpus=None):
+def worker_jobs(argv, devices, shard=None, environ=None, cpus=None, read_threads=None):
 	"""The command and environment of every worker.
 
 	Worker ``k`` runs with only ``devices[k]`` visible and takes share ``index * len(devices) + k``
 	of ``count * len(devices)`` shares of the fields of view, where ``shard = (index, count)`` is the
 	share of the whole run that this machine has (for example one SLURM array task per node).
+
+	Each worker is started with ``--gpu 0``, the one device it can see. It reads the same settings
+	file as the launcher, and ``--gpu`` is what keeps it from starting workers of its own when that
+	file has ``[run] gpus``.
 
 	Parameters
 	----------
@@ -115,6 +120,8 @@ def worker_jobs(argv, devices, shard=None, environ=None, cpus=None):
 	    Default ``os.environ``.
 	cpus : int, optional
 	    Cores of this machine, to split between the workers. Default: the cores this process may use.
+	read_threads : int, optional
+	    Read threads of each worker (``[run] read_threads``). Default: ``cpus`` split between the workers.
 
 	Returns
 	-------
@@ -127,11 +134,14 @@ def worker_jobs(argv, devices, shard=None, environ=None, cpus=None):
 	if cpus is None:
 		cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
 	# without this every worker would start a reader thread pool as large as the whole machine
-	environ.setdefault("DASK_NUM_WORKERS", str(max(1, cpus // n)))
+	if read_threads:
+		environ["DASK_NUM_WORKERS"] = str(read_threads)
+	else:
+		environ.setdefault("DASK_NUM_WORKERS", str(max(1, cpus // n)))
 	base = strip_option(strip_option(argv, "--gpus"), "--shard")
 	jobs = []
 	for k, device in enumerate(devices):
-		cmd = [sys.executable, "-m", "mermake", *base, "--shard", f"{index * n + k}/{count * n}"]
+		cmd = [sys.executable, "-m", "mermake", *base, "--shard", f"{index * n + k}/{count * n}", "--gpu", "0"]
 		jobs.append((cmd, {**environ, "CUDA_VISIBLE_DEVICES": device}))
 	return jobs
 

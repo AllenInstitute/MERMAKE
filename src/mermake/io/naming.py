@@ -5,6 +5,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Tuple, Optional, Union
 
+from . import storage
+
 
 def get_ih(file_path):
 	"""Round number: the first run of digits in the base name of ``file_path``.
@@ -225,6 +227,9 @@ class FolderFilter:
 		"""
 		matches = dict()
 		for root in folders:
+			if storage.is_remote(root):
+				self._remote_matches(root, matches)
+				continue
 			if not os.path.exists(root):
 				continue
 			try:
@@ -246,3 +251,25 @@ class FolderFilter:
 			except PermissionError:
 				continue
 		return matches
+
+	def _remote_matches(self, root, matches):
+		""":meth:`get_matches` for a folder behind a URL (``s3://...``).
+
+		A missing folder is skipped like a missing local one. A folder that cannot be read is an
+		error: unlike a local folder it means the credentials are missing or wrong.
+		"""
+		try:
+			rounds = storage.listdir(root)
+		except FileNotFoundError:
+			return
+		except PermissionError as e:
+			raise PermissionError(f"cannot list {root}: {e}. Check the credentials (AWS_* environment "
+			                      f"variables, ~/.aws, or [paths] storage_options).") from e
+		for name, sub, is_dir in rounds:
+			if is_dir and self.isin(name):
+				iset = get_iset(name)
+				for item, path, item_is_dir in storage.listdir(sub):
+					if item_is_dir and '.zarr' in item:
+						ifov = get_ifov(item)
+						if self.fov_min <= ifov <= self.fov_max:
+							matches.setdefault((iset, ifov), []).append(path)

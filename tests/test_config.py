@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 
 from mermake import cli
-from mermake.config import Config, ConfigError, DEFAULTS, Params, Paths, namespace_to_array, reference_rows, tomllib
+from mermake.config import (Config, ConfigError, DEFAULTS, Output, Params, Paths, Run, namespace_to_array,
+                            reference_rows, tomllib)
 from mermake.io.metadata import get_xml_field, read_xml
 from mermake.points import estimate_step_size, points_to_coords
 
@@ -216,7 +217,7 @@ class TestRoundTrip:
 
 class TestDocs:
 	def test_every_field_is_documented(self):
-		for cls in (Paths, Params):
+		for cls in (Paths, Params, Output, Run):
 			for f in fields(cls):
 				assert f.metadata.get("doc", "").strip(), f"{cls.__name__}.{f.name} has no doc"
 
@@ -229,6 +230,7 @@ class TestDocs:
 		assert ("paths", "psf_file") in keys and ("dapi", "sigmaXY") in keys
 		required = {r["key"] for r in reference_rows() if r["required"] and r["section"] == "paths"}
 		assert required == {"psf_file", "flat_field_tag", "hyb_folders", "hyb_range", "output_folder"}
+		assert {("run", "gpus"), ("run", "prefetch")} <= keys
 
 	def test_patch_overlap_documents_the_change_of_its_default(self):
 		# the description is what --print-config and the configuration page show
@@ -245,6 +247,14 @@ class TestDocs:
 		cfg = Config.from_dict(tomllib.loads(cli.example_text()), check_files=False)
 		assert cfg.paths.hyb_range == "H1_BICAN_set1:H16_BICAN_set1"
 
+	def test_packaged_run_example_is_valid_when_uncommented(self):
+		lines = cli.example_text().splitlines()
+		start = lines.index("#[run]")
+		block = [line[1:] for line in lines[start:start + 3]]
+		assert block[0] == "[run]" and block[1].startswith("gpus") and block[2].startswith("prefetch")
+		cfg = Config.from_dict(tomllib.loads(cli.example_text() + "\n" + "\n".join(block)), check_files=False)
+		assert cfg.run.gpus == "all" and cfg.run.prefetch == 3
+
 
 class TestOutput:
 	def test_default_is_parquet(self):
@@ -257,3 +267,66 @@ class TestOutput:
 	def test_invalid_format(self):
 		with pytest.raises(ConfigError, match="format must be one of"):
 			load(output=dict(format="csv"))
+
+
+class TestRun:
+	def test_defaults(self):
+		run = load().run
+		assert run.gpus is None and run.prefetch == 5
+
+	@pytest.mark.parametrize("value, expected", [
+		("all", "all"), ("0,1", "0,1"), (" 0, 1 ", "0,1"), ("2", "2"), ("0,0,1,1", "0,0,1,1"),
+		([0, 1], "0,1"), ([3], "3"), ([0, 0, 1], "0,0,1")])
+	def test_gpus_is_kept_as_the_text_of_the_option(self, value, expected):
+		assert load(run={"gpus": value}).run.gpus == expected
+
+	@pytest.mark.parametrize("value", ["zero", "-1", "0,,1", "0;1", "", "all,0", [], [-1], [0, "a"], 0, True, 1.5])
+	def test_bad_gpus(self, value):
+		with pytest.raises(ConfigError, match=r"\[run\] gpus"):
+			load(run={"gpus": value})
+
+	def test_prefetch(self):
+		assert load(run={"prefetch": 2}).run.prefetch == 2
+		for value in (0, -1):
+			with pytest.raises(ConfigError, match="prefetch must be at least 1"):
+				load(run={"prefetch": value})
+		for value in ("2", True, 2.5):
+			with pytest.raises(ConfigError, match="prefetch must be an integer"):
+				load(run={"prefetch": value})
+
+	def test_read_threads(self):
+		assert load().run.read_threads is None
+		assert load(run={"read_threads": 16}).run.read_threads == 16
+		for value in (0, -2):
+			with pytest.raises(ConfigError, match="read_threads must be at least 1"):
+				load(run={"read_threads": value})
+		for value in ("16", True, 2.5):
+			with pytest.raises(ConfigError, match="read_threads"):
+				load(run={"read_threads": value})
+
+	def test_overlap_channels(self):
+		assert load().run.overlap_channels is False
+		assert load(run={"overlap_channels": True}).run.overlap_channels is True
+		with pytest.raises(ConfigError, match="overlap_channels"):
+			load(run={"overlap_channels": "yes"})
+
+	def test_misspelled_key_suggests_fix(self):
+		with pytest.raises(ConfigError, match="did you mean 'gpus'"):
+			load(run={"gpu": 1})
+
+	def test_round_trip(self):
+		cfg = load(run={"gpus": [0, 0, 1], "prefetch": 2})
+		text = cfg.to_toml()
+		assert "gpus = '0,0,1'" in text and "prefetch = 2" in text
+		assert Config.from_dict(tomllib.loads(text), check_files=False) == cfg
+
+	def test_not_set_is_written_as_a_comment(self):
+		assert "# gpus = (not set)" in load().to_toml()
+		assert Config.from_dict(tomllib.loads(load().to_toml()), check_files=False) == load()
+
+	def test_listed_with_its_description(self):
+		rows = {(r["section"], r["key"]): r for r in reference_rows()}
+		assert rows[("run", "gpus")]["type"] == "string or list of integers"
+		assert rows[("run", "gpus")]["default"] is None and not rows[("run", "gpus")]["required"]
+		assert rows[("run", "prefetch")]["default"] == 5 and rows[("run", "prefetch")]["unit"] == "images"
+		assert "--gpus" in rows[("run", "gpus")]["doc"] and "--prefetch" in rows[("run", "prefetch")]["doc"]

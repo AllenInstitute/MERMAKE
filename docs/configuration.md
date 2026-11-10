@@ -40,14 +40,34 @@ None of them needs a GPU.
 
 ## Running
 
-| Option | What it does |
-|---|---|
-| `-g N`, `--gpu N` | use GPU `N`, counted among the visible ones. Without it the environment is left alone and the first visible GPU is used, so a scheduler's `CUDA_VISIBLE_DEVICES` is respected |
-| `--gpus all` or `--gpus 0,1,2` | run one worker per GPU on this machine, each on its own share of the fields of view |
-| `--shard I/N` | process share `I` (from 0) of `N` of the fields of view, every round of a field of view together |
-| `--prefetch N` | images read ahead of the GPU (default 5). Each is held in memory whole, so this sets most of the RAM use |
+How a run uses the machine is set on the command line, or in the `[run]` section of the settings file for a job that cannot take a command line (a Code Ocean run, a script that only starts `mermake settings.toml`):
 
-See [several GPUs and nodes](scaling.md).
+```toml
+[run]
+gpus = "all"       # one worker per visible GPU. Or "0,1", or [0, 1]; a number can repeat
+prefetch = 3
+```
+
+The command line wins over the file, and the file over the defaults.
+
+| Option | `[run]` key | What it does |
+|---|---|---|
+| `-g N`, `--gpu N` | | use GPU `N`, counted among the visible ones, in one process. It overrides `gpus` of the file. Without it the environment is left alone and the first visible GPU is used, so a scheduler's `CUDA_VISIBLE_DEVICES` is respected |
+| `--gpus all` or `--gpus 0,1,2` | `gpus` | run one worker per GPU on this machine, each on its own share of the fields of view |
+| `--shard I/N` | | process share `I` (from 0) of `N` of the fields of view, every round of a field of view together. Command line only, because it differs from one process or node to the next |
+| `--prefetch N` | `prefetch` | images read ahead of the GPU (default 5). Each is held in memory whole, so this sets most of the RAM use |
+| `--read-threads N` | `read_threads` | threads each worker reads and decompresses chunks with. Not set: the cores of the machine, split between the workers. Reading mostly waits on the storage, so on storage with a high cost per request (a FUSE mount of S3) more threads than cores read faster, up to what the storage delivers |
+| `--overlap-channels` | `overlap_channels` | read all the channels of an image at once instead of one after the other (default `false`), so the storage is not left idle at the end of each channel. While an image is read it can hold up to one more image of RAM |
+
+### Images in object storage
+
+`hyb_folders` can name a folder in object storage instead of a local one, for example `hyb_folders = ["s3://my-bucket/experiment"]`. mermake then lists and reads the images directly, without a mount. This needs the `s3` extra (`pip install 'mermake[s3]'` or `uv sync --extra s3`). Only the images are read this way: `psf_file`, `flat_field_tag` and `output_folder` stay local.
+
+- **Credentials** come from the usual AWS chain: the `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` environment variables, `~/.aws`, or the role of the machine. `[paths] storage_options` is passed to fsspec as is, for example `storage_options = {profile = "mylab"}`. Do not put keys in the settings file. Only the names of these options are saved with the results.
+- **Read threads.** Object storage serves many requests at once, each taking about 0.1-0.2 s, so set `read_threads` to 32-64. 32 was as fast as 64 on a g5.2xlarge, and used about 1.4 GiB less host RAM. mermake sizes the connection pool to match.
+- **Temporary credentials** expire, often after an hour or a few. In a run that outlives them, every image after that point fails with a `Warning: failed to read ...` line and is skipped. Run again with fresh credentials: finished images are not redone, so only the skipped ones are processed.
+
+`--check` and `--suggest-threshold` work in one process and ignore `gpus`. `mermake --dry-run` says how the run would use the machine. See [several GPUs and nodes](scaling.md).
 
 ## Reference
 

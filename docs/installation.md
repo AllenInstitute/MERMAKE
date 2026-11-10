@@ -25,7 +25,7 @@ With pip:
 python3 -m pip install "mermake[cuda12]"
 ```
 
-Add the `viz` extra (`mermake[cuda12,viz]`) for the napari viewer behind `mermake --check`.
+Add the `viz` extra (`mermake[cuda12,viz]`) for the napari viewer behind `mermake --check`, and the `s3` extra (`mermake[cuda12,s3]`) to read images straight from S3 (see [the configuration page](configuration.md#images-in-object-storage)).
 
 ## Without a GPU
 

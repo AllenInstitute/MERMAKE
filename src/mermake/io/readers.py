@@ -6,6 +6,7 @@ import dask.array as da
 import cupy as cp
 import numpy as np
 from ..gpu import blur
+from . import storage
 
 def dapi_index(ncol, dapi_channel=-1):
 	"""Index of the dapi channel in an image with ``ncol`` channels (after any ``sum_channels`` merge).
@@ -149,9 +150,10 @@ def array_path(path):
 
 	``path`` is the ``<name>_<fov>.zarr`` entry of a round folder. If that is itself a zarr array
 	(the layout written by current acquisition software) it is the answer. Older acquisitions
-	store a group there and keep the array in ``<round folder>/<fov>/data``.
+	store a group there and keep the array in ``<round folder>/<fov>/data``. ``path`` can be a
+	URL (``s3://...``), see :mod:`mermake.io.storage`.
 	"""
-	if os.path.exists(os.path.join(path, '.zarray')):
+	if storage.exists(os.path.join(path, '.zarray')):
 		return path
 	fov = os.path.basename(path).split('_')[-1].split('.')[0]
 	return os.path.join(os.path.dirname(path), fov, 'data')
@@ -202,7 +204,7 @@ def read_im(path, return_pos=False, sum_channels=None):
 	Parameters
 	----------
 	path : str
-	    Path of the ``.zarr`` entry.
+	    Path of the ``.zarr`` entry, local or a URL (``s3://...``, see :mod:`mermake.io.storage`).
 	return_pos : bool
 	    Also return the stage position from the XML file.
 	sum_channels : sequence of int, optional
@@ -222,11 +224,14 @@ def read_im(path, return_pos=False, sum_channels=None):
 	#z = zarr.open(file_, mode='r')
 	#image = np.array(z[1:])
 	from dask import array as da
-	image = da.from_zarr(file_)
+	if storage.is_remote(file_):
+		image = da.from_zarr(file_, storage_options=storage.storage_options(file_))
+	else:
+		image = da.from_zarr(file_)
 
 	xml_file = os.path.splitext(path)[0] + '.xml'
-	if os.path.exists(xml_file):
-		txt = open(xml_file, 'r').read()
+	if storage.exists(xml_file):
+		txt = storage.read_text(xml_file)
 		tag = '<z_offsets type="string">'
 		zstack = txt.split(tag)[-1].split('</')[0]
 

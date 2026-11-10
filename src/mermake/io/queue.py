@@ -10,6 +10,7 @@ import cupy as cp
 from .. import __version__
 from .readers import read_im, Container, color_indices, dapi_index
 from .naming import get_ih, get_ifov, get_iset, FolderFilter, shard_matches
+from . import storage
 from ..config import namespace_to_array
 from . import spots
 
@@ -62,6 +63,11 @@ class ImageQueue:
 	prefetch_count : int
 	    How many images to read ahead. Each is held in memory whole.
 
+	``args.read_threads`` (threads to read with; ``None``: dask's default, the cores or
+	``DASK_NUM_WORKERS``) and ``args.overlap_channels`` (read all channels of an image in one go
+	instead of one after the other) are taken from ``args`` if set there, otherwise from
+	``[run]`` of the settings.
+
 	Attributes
 	----------
 	shape : tuple of int
@@ -76,8 +82,16 @@ class ImageQueue:
 	def __init__(self, args, prefetch_count=5):
 		self.args = args
 		self.args_array = namespace_to_array(self.args.settings)
+		run = getattr(args.settings, 'run', None)
+		self.read_threads = getattr(args, 'read_threads', None)
+		if self.read_threads is None:
+			self.read_threads = getattr(run, 'read_threads', None)
+		self.overlap_channels = getattr(args, 'overlap_channels', None)
+		if self.overlap_channels is None:
+			self.overlap_channels = bool(getattr(run, 'overlap_channels', False))
 		self.__dict__.update(vars(args.paths))
 		self.output_format = args.settings.output.format
+		storage.configure(getattr(args.paths, 'storage_options', None), self.read_threads)
 
 		os.makedirs(self.output_folder, exist_ok = True)
 		
@@ -97,15 +111,16 @@ class ImageQueue:
 			self.summary = f"shard {shard[0]}/{shard[1]}: {len(selected)} of {len(matches)} fov groups\n" + self.summary
 
 		# Peek at first image to set shape/dtype
-		first_image = None
+		first_image, first_error = None, None
 		for path in chain.from_iterable(matches.values()):
 			try:
 				first_image = read_im(path, sum_channels=self.sum_channels)
 				break
-			except Exception:
+			except Exception as e:
+				first_error = first_error or f"{path}: {type(e).__name__}: {e}"
 				continue
 		if first_image is None:
-			raise RuntimeError("No valid images found.")
+			raise RuntimeError("No valid images found." + (f" The first one failed with {first_error}" if first_error else ""))
 		self.shape = first_image.shape
 		self.dtype = first_image.dtype
 	
@@ -138,18 +153,20 @@ class ImageQueue:
 		iset = get_iset(path)
 		ifov = get_ifov(path)
 		ih = get_ih(os.path.dirname(path))
+		# the channels to read: colors first, then dapi, only those that have not been processed
+		todo = []
 		for icol, chan in enumerate(color_indices(self.shape[0], self.dapi_channel)):
-			# only compute if the image has not been processed
 			if not self._is_done(path, icol):
-				container[chan].compute()
+				todo.append(chan)
 			else:
 				setattr(container, f'col{icol}', self._load(path, icol, 'Xh'))
 		icol = -1
 		if not self._is_done(path, icol):
-			container[dapi_index(self.shape[0], self.dapi_channel)].compute()
+			todo.append(dapi_index(self.shape[0], self.dapi_channel))
 		else:
 			container.Xh_plus = self._load(path, icol, 'Xh_plus')
 			container.Xh_minus = self._load(path, icol, 'Xh_minus')
+		self._read_channels(container, todo)
 		# attach drift file to container
 		#filename = self.drift_save.format(ifov=ifov, iset=iset)
 		filename = self.get_name(path)
@@ -165,6 +182,25 @@ class ImageQueue:
 		container.ifov = ifov
 		container.ih = ih
 		return container
+
+	def _read_channels(self, container, chans):
+		"""Read the channels ``chans`` of ``container`` into memory, in place.
+
+		One after the other by default, each with ``read_threads`` threads. With ``overlap_channels``
+		all of them go to dask as one graph, so the reads of the next channel start while the last
+		files of the previous one are still coming in.
+		"""
+		import dask
+		import dask.array as da
+		chans = [c for c in chans if isinstance(container[c].data, da.Array)]
+		kwargs = {'num_workers': self.read_threads} if self.read_threads else {}
+		if self.overlap_channels and len(chans) > 1:
+			arrays = dask.compute(*(container[c].data for c in chans), **kwargs)
+			for c, a in zip(chans, arrays):
+				container[c].data = a
+		else:
+			for c in chans:
+				container[c].data = container[c].data.compute(**kwargs)
 
 	def _worker(self):
 		"""Continuously read images and put them in the queue, then ``None`` to say there are no more."""
